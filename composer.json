@@ -101,6 +101,11 @@
         "symfony/symfony": "*"
     },
     "extra": {
+    	"paas": {
+     		"engines": {
+        		"composer": "2.x"
+      		}
+    	},
         "symfony": {
             "allow-contrib": false,
             "require": "4.4.*"
