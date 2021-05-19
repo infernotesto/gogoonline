@@ -59,8 +59,7 @@ class ElementFile extends AbstractFile
  * @MongoDB\Document(repositoryClass="App\Repository\ElementRepository")
  * @Vich\Uploadable
  * @MongoDB\Indexes({
- *   @MongoDB\Index(keys={"geo"="2d"}),
- *   @MongoDB\Index(keys={"name"="text"})
+ *   @MongoDB\Index(keys={"geo"="2d"})
  * })
  */
 class Element
@@ -87,7 +86,7 @@ class Element
     /**
      * If element need moderation we write here the type of modification needed.
      *
-     * @MongoDB\Field(type="int")
+     * @MongoDB\Field(type="int") @MongoDB\Index
      */
     private $moderationState = 0;
 
@@ -96,7 +95,7 @@ class Element
      *
      * Users can report some problem related to the Element (no more existing, wrong informations...)
      *
-     * @MongoDB\ReferenceMany(targetDocument="App\Document\UserInteractionReport", cascade={"persist", "delete"})
+     * @MongoDB\ReferenceMany(targetDocument="App\Document\UserInteractionReport", cascade={"persist", "remove"})
      */
     private $reports;
 
@@ -105,7 +104,7 @@ class Element
      *
      * History of users contributions (add, edit, by whom, how many votes etc...)
      *
-     * @MongoDB\ReferenceMany(targetDocument="App\Document\UserInteractionContribution", cascade={"persist", "delete"})
+     * @MongoDB\ReferenceMany(targetDocument="App\Document\UserInteractionContribution", cascade={"persist", "remove"})
      */
     private $contributions;
 
@@ -115,7 +114,7 @@ class Element
      * When a user propose a modification to an element, the modified element in saved in this attributes,
      * so we keep recording both versions (the old one and the new one) and so we can display the diff
      *
-     * @MongoDB\ReferenceOne(targetDocument="App\Document\Element", cascade={"persist", "delete"})
+     * @MongoDB\ReferenceOne(targetDocument="App\Document\Element", cascade={"persist", "remove"})
      */
     private $modifiedElement;
 
@@ -212,7 +211,7 @@ class Element
     /**
      * The source from where the element has been imported or created.
      *
-     * @MongoDB\ReferenceOne(targetDocument="App\Document\Import")
+     * @MongoDB\ReferenceOne(targetDocument="App\Document\Import") @MongoDB\Index
      */
     private $source;
 
@@ -227,7 +226,7 @@ class Element
 
     /**
      * potential duplicates stored by detect duplicate bulk action.
-     *
+     * @MongoDB\Index
      * @MongoDB\ReferenceMany(targetDocument="App\Document\Element")
      */
     private $potentialDuplicates;
@@ -236,18 +235,22 @@ class Element
      * To simlifu duplicates process, we store the element which have been treated in the duplicates detection
      * Because if we check duplicates for element A, and element B and C are detected as potential duplicates, then
      * we do not detect duplicates for B and C.
-     *
+     * @MongoDB\Index
      * @MongoDB\Field(type="bool", nullable=true)
      */
     private $isDuplicateNode = false;
 
     /**
      * Mark some element as Non duplicates, so if we run again the duplicate detection they will not be detected.
-     *
+     * @MongoDB\Index
      * @MongoDB\ReferenceMany(targetDocument="App\Document\Element")
      */
     private $nonDuplicates;
 
+
+    /** @MongoDB\Field(type="string") @MongoDB\Index */
+    private $duplicateOf;
+    
     /**
      * @var string
      *
@@ -299,14 +302,14 @@ class Element
     private $randomHash;
 
     /**
-     * @MongoDB\Field(type="string")
+     * @MongoDB\Field(type="string") @MongoDB\Index
      */
     private $userOwnerEmail;
 
     /**
      * Shorcut to know if this element is managed by a dynamic source.
      *
-     * @MongoDB\Field(type="bool")
+     * @MongoDB\Field(type="bool") @MongoDB\Index
      */
     private $isExternal;
 
@@ -314,9 +317,15 @@ class Element
      * When actions are made by many person (like moderation, duplicates check...) we lock the elements currently proceed by someone
      * so noone else make action on the same element.
      *
-     * @MongoDB\Field(type="int")
+     * @MongoDB\Field(type="int") @MongoDB\Index
      */
     private $lockUntil = 0;
+
+    /** @MongoDB\Field(type="string") @MongoDB\Index */
+    private $lockedByUserEmail = '';
+
+    /** @MongoDB\Field(notSaved=true) */
+    public $score;
 
     private $preventJsonUpdate = false;
 
@@ -370,17 +379,26 @@ class Element
         }
     }
 
-    public function isReadOnly()
+    public function isEditable()
     {
         if (!$this->getSource()) return true;
-        return !$this->isSynchedWithExternalDatabase();
+        return !$this->getIsExternal() || $this->isSynchedWithExternalDatabase();
     }
 
     public function isSynchedWithExternalDatabase()
     {
-        // TODO is should be configured on the external source (i.e the import)
-        // not all the import will want the imported data to be editable and synchronized
+        return $this->isFromOsm() && $this->getSource()->getIsSynchronized();
+    }
+
+    public function isFromOsm()
+    {
         return $this->getIsExternal() && $this->getSource()->getSourceType() == 'osm';
+    }
+
+    public function getOsmUrl($config)
+    {
+        if (!$this->isFromOsm()) return '';
+        return $config->getOsm()->getFormattedOsmHost() . $this->getProperty('osm_type') . '/' . $this->getOldId();
     }
 
     public function getShowUrlFromController($router)
@@ -444,7 +462,7 @@ class Element
         $reports = $this->getArrayFromCollection($this->getReports());
         $contributions = $this->getArrayFromCollection($this->getContributions());
         $resolvedReports = array_filter($reports, function ($e) { return $e->getIsResolved(); });
-        $contributions = array_filter($contributions, function ($e) { return $e->getStatus() ? $e->getStatus() > ElementStatus::ModifiedPendingVersion : false; });
+        $contributions = array_filter($contributions, function ($e) { return $e->getStatus() != ElementStatus::ModifiedPendingVersion; });
         $result = array_merge($resolvedReports, $contributions);
         usort($result, function ($a, $b) { return $b->getTimestamp() - $a->getTimestamp(); });
 
@@ -488,15 +506,8 @@ class Element
     {
         $result = [];
         if ($this->nonDuplicates) {
-            try {
-                $result = array_map(function ($nonDuplicate) {
-                    return $nonDuplicate->getId();
-                }, $this->nonDuplicates->toArray());
-            } catch (\Exception $e) {
-                // fixs error when one of the non duplicates as been deleted and is not found
-                $result = [];
-                $this->nonDuplicates = [];
-            }
+            foreach($this->nonDuplicates as $nonDuplicate)
+                $result[] = $nonDuplicate->getId();
         }
         if ($this->getId()) {
             $result[] = $this->getId();
@@ -510,40 +521,12 @@ class Element
         return ModerationState::PotentialDuplicate == $this->moderationState;
     }
 
-    public function getSortedDuplicates($duplicates = null)
-    {
-        if (!$duplicates) {
-            $duplicates = $this->getPotentialDuplicates() ? $this->getPotentialDuplicates()->toArray() : null;
-        }
-        if (!$duplicates) {
-            return [];
-        }
-        $duplicates[] = $this;
-        usort($duplicates, function ($a, $b) {
-            // Keep in priority the one from our DB instead of the ones dynamically imported
-            $aIsDynamicImported = $a->isDynamicImported();
-            $bIsDynamicImported = $b->isDynamicImported();
-            if ($aIsDynamicImported != $bIsDynamicImported) {
-                return $aIsDynamicImported - $bIsDynamicImported;
-            }
-            // Or get the more recent
-            $diffDays = (float) date_diff($a->getUpdatedAt(), $b->getUpdatedAt())->format('%d');
-            if (0 != $diffDays) {
-                return $diffDays;
-            }
-            // Or the one with more categories
-            return $b->countOptionsValues() - $a->countOptionsValues();
-        });
-
-        return $duplicates;
-    }
-
     public function isDynamicImported()
     {
         return $this->isExternal;
     }
 
-    public function getJson($includeAdminJson)
+    public function getJson($includeAdminJson = false)
     {
         $result = '{' . $this->baseJson;
         if ($includeAdminJson && $this->adminJson && '' != $this->adminJson) {
@@ -569,12 +552,17 @@ class Element
 
     public function isVisible()
     {
-        return $this->status >= -1;
+        return $this->status >= ElementStatus::PendingModification;
+    }
+
+    public function isDeleted()
+    {
+        return $this->status <= ElementStatus::AdminRefused;
     }
 
     public function isValid()
     {
-        return $this->status > 0;
+        return $this->status >= ElementStatus::AdminValidate;
     }
 
     public function havePendingReports()
@@ -637,7 +625,7 @@ class Element
     public function setOptionIds($optionsIds)
     {
         foreach ($this->getOptionValues() as $optionValue) {
-            if (!in_array($optionValue->getOptionId(), $optionsIds)) 
+            if (!in_array($optionValue->getOptionId(), $optionsIds))
                 $this->removeOptionValue($optionValue);
         }
         $optionIdsToAdd = array_diff($optionsIds, $this->getOptionIds());
@@ -987,6 +975,10 @@ class Element
      */
     public function setModerationState($moderationState)
     {
+        // Do not overide a potential duplicate state with other moderation types
+        if ($this->moderationState == ModerationState::PotentialDuplicate 
+        && !$moderationState == ModerationState::NotNeeded)
+            return;
         $this->moderationState = $moderationState;
 
         return $this;
@@ -1218,6 +1210,17 @@ class Element
         return $this->optionsString;
     }
 
+    // in the UI, a Category correspond to an Option in the code...
+    public function getCategoriesIds()
+    {
+        return $this->getOptionIds();
+    }
+
+    public function getCategoriesNames()
+    {
+        return explode(',', str_replace(' ', '', $this->optionsString));
+    }
+
     /**
      * Set randomHash.
      *
@@ -1353,8 +1356,10 @@ class Element
     public function getImagesUrls()
     {
         $result = [];
-        foreach ($this->images as $image) {
-            $result[] = $image->getImageUrl();
+        if($this->images != null) {
+            foreach ($this->images as $image) {
+                $result[] = $image->getImageUrl();
+            }
         }
 
         return $result;
@@ -1367,7 +1372,8 @@ class Element
      */
     public function addPotentialDuplicate(\App\Document\Element $potentialDuplicate)
     {
-        $this->potentialDuplicates[] = $potentialDuplicate;
+        if (!in_array($potentialDuplicate, $this->potentialDuplicates->toArray()))
+            $this->potentialDuplicates[] = $potentialDuplicate;
     }
 
     /**
@@ -1380,9 +1386,16 @@ class Element
         if (is_array($this->potentialDuplicates)) {
             $key = array_search($potentialDuplicate, $this->$this->potentialDuplicates);
             unset($this->potentialDuplicates[$key]);
+            $potDupsCount = count($this->potentialDuplicates);
         } else {
             $this->potentialDuplicates->removeElement($potentialDuplicate);
+            $potDupsCount = $this->potentialDuplicates->count();
         }
+        if ($potDupsCount == 0) {
+            $this->setIsDuplicateNode(false);
+            $this->setModerationState(ModerationState::NotNeeded);
+        }
+        return $this;
     }
 
     /**
@@ -1490,6 +1503,10 @@ class Element
     public function setSource(\App\Document\Import $source)
     {
         $this->source = $source;
+        if ($source->isDynamicImport()) {
+            $this->setIsExternal(true); // shortcut for easy querying
+        }
+        $this->setSourceKey($source->getSourceName());
 
         return $this;
     }
@@ -1525,6 +1542,12 @@ class Element
      */
     public function getData()
     {
+        return $this->data;
+    }
+
+    public function getSortedData()
+    {
+        ksort($this->data);
         return $this->data;
     }
 
@@ -1658,10 +1681,72 @@ class Element
     public function getFilesUrls()
     {
         $result = [];
-        foreach ($this->files as $file) {
-            $result[] = $file->getFileUrl();
+        if($this->files != null) {
+            foreach ($this->files as $file) {
+                $result[] = $file->getFileUrl();
+            }
         }
 
         return $result;
+    }
+
+    /**
+     * Get the value of score
+     */
+    public function getScore()
+    {
+        return $this->score;
+    }
+
+    /**
+     * Set the value of score
+     *
+     * @return  self
+     */
+    public function setScore($score)
+    {
+        $this->score = $score;
+
+        return $this;
+    }
+
+    /**
+     * Get the value of lockedByUserEmail
+     */ 
+    public function getLockedByUserEmail()
+    {
+        return $this->lockedByUserEmail;
+    }
+
+    /**
+     * Set the value of lockedByUserEmail
+     *
+     * @return  self
+     */ 
+    public function setLockedByUserEmail($lockedByUserEmail)
+    {
+        $this->lockedByUserEmail = $lockedByUserEmail;
+
+        return $this;
+    }
+
+    /**
+     * Get the value of duplicateOf
+     */ 
+    public function getDuplicateOf()
+    {
+        return $this->duplicateOf;
+    }
+
+    /**
+     * Set the value of duplicateOf
+     *
+     * @return  self
+     */ 
+    public function setDuplicateOf($duplicateOf)
+    {
+        $this->duplicateOf = $duplicateOf;
+
+        return $this;
     }
 }

@@ -10,6 +10,7 @@ use App\Document\Configuration\ConfigurationMenu;
 use App\Document\Configuration\ConfigurationUser;
 use App\Document\Configuration\ConfigurationSaas;
 use App\Document\Configuration\ConfigurationOsm;
+use App\Document\Configuration\ConfigurationDuplicates;
 use Doctrine\ODM\MongoDB\Mapping\Annotations as MongoDB;
 use Gedmo\Mapping\Annotation as Gedmo;
 use OzdemirBurak\Iris\Color\Hex;
@@ -17,10 +18,13 @@ use OzdemirBurak\Iris\Color\Rgba;
 use Symfony\Component\Validator\Constraints as Assert;
 use Symfony\Component\Validator\Context\ExecutionContextInterface;
 use App\Helper\GoGoHelper;
+use Doctrine\ODM\MongoDB\Mapping\Annotations\HasLifecycleCallbacks;
+use Doctrine\ODM\MongoDB\Mapping\Annotations\PostLoad;
 
 /**
  * Main Configuration.
- *
+ * 
+ * @HasLifecycleCallbacks
  * @MongoDB\Document(repositoryClass="App\Repository\ConfigurationRepository")
  */
 class Configuration implements \JsonSerializable
@@ -450,6 +454,9 @@ class Configuration implements \JsonSerializable
 
     /** @MongoDB\EmbedOne(targetDocument="App\Document\Configuration\ConfigurationOsm") */
     protected $osm;
+    
+    /** @MongoDB\EmbedOne(targetDocument="App\Document\Configuration\ConfigurationDuplicates") */
+    protected $duplicates;
 
     // ----------------------------
     // ---------- SAAS ------------
@@ -499,22 +506,41 @@ class Configuration implements \JsonSerializable
         $this->infobar = new ConfigurationInfobar();
         $this->api = new ConfigurationApi();
         $this->osm = new ConfigurationOsm();
+        $this->duplicates = new ConfigurationDuplicates();
         $this->home = new ConfigurationHome();
         $this->marker = new ConfigurationMarker();
     }
+
+    /** @PostLoad */
+    public function postLoad()
+    {
+        $this->getDuplicates()->setFormFields($this->getElementFormFields());
+    } 
 
     public function jsonSerialize()
     {
         return get_object_vars($this);
     }
 
+    /**
+     * List of the fields needed in the gogo compact API : all basic field
+     * for the marker to be rendered. I.e lat/lng, infos for filtering, and infos for the markerPopup
+     */
     public function getCompactFields()
     {
-        $compactFields = $this->getMarker()->getFieldsUsedByTemplate();
+        $compactFields = [];
         foreach ($this->getMenu()->getFilters() as $filter) {
-            if (isset($filter->field)) $compactFields[] = $filter->field;
+            if (isset($filter->field)) {
+                $compactFields[$filter->field] = $filter->type;
+            }
+            if (isset($filter->fieldEnd)) {
+                $compactFields[$filter->fieldEnd] = $filter->type;
+            }
         }
-        return array_unique($compactFields);
+        foreach($this->getMarker()->getFieldsUsedByTemplate() as $field) {
+            $compactFields[$field] = 'markerTemplate';
+        }
+        return $compactFields; 
     }
 
     /**
@@ -3534,6 +3560,29 @@ class Configuration implements \JsonSerializable
     public function setCustomDomain($domain)
     {
         $this->customDomain = $domain;
+        return $this;
+    }
+
+    /**
+     * Get the value of duplicates
+     */ 
+    public function getDuplicates()
+    {
+        if (!$this->duplicates) {
+            $this->duplicates = new ConfigurationDuplicates();
+        }
+        return $this->duplicates;
+    }
+
+    /**
+     * Set the value of duplicates
+     *
+     * @return  self
+     */ 
+    public function setDuplicates($duplicates)
+    {
+        $this->duplicates = $duplicates;
+
         return $this;
     }
 }

@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Document\Configuration;
 use App\Document\ConfImage;
 use App\Document\InteractionType;
 use App\Document\UserInteractionContribution;
@@ -17,12 +16,16 @@ use Psr\Http\Message\ResponseInterface;
 use GuzzleHttp\Exception\RequestException;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
 use Psr\Log\LoggerInterface;
+use App\Document\GoGoLog;
+use App\Document\GoGoLogLevel;
 
 class WebhookService
 {
     protected $dm;
-
+    protected $config;
     protected $router;
+
+    const MAX_ATTEMPTS = 7; // number of attempte for posting webhook
 
     public function __construct(DocumentManager $dm, RouterInterface $router,
                                 TokenStorageInterface $securityContext,
@@ -34,16 +37,21 @@ class WebhookService
         $this->router = $router;
         $this->urlService = $urlService;
         $this->securityContext = $securityContext;
-        $this->config = $this->dm->get('Configuration')->findConfiguration();
         $this->synchService = $synchService;
         $this->logger = $commandsLogger;
+    }
+
+    public function getConfig()
+    {
+        if (!$this->config) $this->config = $this->dm->get('Configuration')->findConfiguration();
+        return $this->config;
     }
 
     public function processPosts($limit = 5)
     {
         $contributions = $this->dm->createQueryBuilder(UserInteractionContribution::class)
             ->field('status')->exists(true) // null status are pending contributions, so ignore
-            ->field('webhookPosts.numAttempts')->lte(6) // ignore posts with 6 failures
+            ->field('webhookPosts.numAttempts')->lt(self::MAX_ATTEMPTS) // ignore posts with 6 failures
             ->field('webhookPosts.nextAttemptAt')->lte(new \DateTime())
             ->limit($limit)
             ->execute();
@@ -62,8 +70,8 @@ class WebhookService
                 $webhook = $post->getWebhook();
 
                 if ($webhook) {
-                    $jsonData = json_encode($this->formatData($webhook->getFormat(), $data));
-                    $promise = $client->postAsync($webhook->getUrl(), [], $jsonData);
+                    $jsonData = $this->formatData($webhook->getFormat(), $data);
+                    $promise = $client->postAsync($webhook->getUrl(), ['json' => $jsonData]);
                 } else {
                     // when no webhook it mean it's a special handling, like for OpenStreetMap
                     $promise = $this->synchService->asyncDispatch($contribution, $data);
@@ -75,7 +83,7 @@ class WebhookService
                         if ($res->getStatusCode() == 200)
                             $this->handlePostSuccess($post, $contribution);
                         else
-                            $this->handlePostFailure($res->getReasonPhrase(), $post, $contribution);
+                            $this->handlePostFailure($res->getReasonPhrase(), $post, $contribution, $res->getStatusCode());
                     },
                     function (RequestException $e) use($post, $contribution) {
                         $this->handlePostFailure($e->getMessage(), $post, $contribution);
@@ -98,12 +106,23 @@ class WebhookService
         $contribution->removeWebhookPost($post);
     }
 
-    private function handlePostFailure($errorMessage, $post, $contribution)
+    private function handlePostFailure($errorMessage, $post, $contribution, $code = 500)
     {
         $attemps = $post->incrementNumAttempts();
         $this->logger->error("Webhook for contribution {$contribution->getId()} : $errorMessage");
         // After first try, wait 5m, 25m, 2h, 10h, 2d
         $intervalInMinutes = pow(5, $attemps);
+        $elName = "\"{$contribution->getElement()->getName()}\" ({$contribution->getElement()->getId()})";
+        if ($post->getWebhook()) {
+            $message = "Erreur lors de l'envoi du webhook {$post->getWebhook()->getUrl()} pour l'élement $elName";
+        } else {
+            $message = "Erreur lors de la synchronisation de l'élement $elName.";
+            if ($code == 401) $message .= " Les identifiants de votre compte OSM sont probablement incorrect.";
+        }
+        $message .= " (Essai n°$attemps). L'erreur est : $errorMessage";
+        $log = new GoGoLog(GoGoLogLevel::Error, $message);
+        $this->dm->persist($log);
+        $this->dm->flush();
         $interval = new \DateInterval("PT{$intervalInMinutes}M");
         $now = new \DateTime();
         $post->setNextAttemptAt($now->add($interval));
@@ -139,7 +158,7 @@ class WebhookService
 
     private function getNotificationText($result)
     {
-        $element = $this->config->getElementDisplayName();
+        $element = $this->getConfig()->getElementDisplayName();
         switch ($result['action']) {
             case 'add':
                 return "**AJOUT** {$element} **{$result['data']['name']}** ajouté par {$result['user']}\n[Lien vers la fiche]({$result['link']})";
@@ -157,7 +176,7 @@ class WebhookService
 
     private function getBatchNotificationText($result)
     {
-        $elements = $this->config->getElementDisplayNamePlural();
+        $elements = $this->getConfig()->getElementDisplayNamePlural();
         $title = $this->transTitle[$result['action']];
         $text = $this->transText[$result['action']];
         $count = count($result['data']['ids']);
@@ -168,7 +187,7 @@ class WebhookService
     private function getBotIcon()
     {
         /** @var ConfImage $img */
-        $img = $this->config->getFavicon() ? $this->config->getFavicon() : $this->config->getLogo();
+        $img = $this->getConfig()->getFavicon() ? $this->getConfig()->getFavicon() : $this->getConfig()->getLogo();
 
         return $img ? $img->getImageUrl() : $this->urlService->getAssetUrl('/img/default-icon.png');
     }
@@ -181,7 +200,7 @@ class WebhookService
 
             case WebhookFormat::Mattermost:
                 return [
-                    'username' => $this->config->getAppName(),
+                    'username' => $this->getConfig()->getAppName(),
                     'icon_url' => $this->getBotIcon(),
                     'text' => $data['text'],
                 ];

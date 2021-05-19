@@ -52,7 +52,7 @@ class User extends BaseUser
      * Newletter sending the recently added elements
      * See NewsletterFrequencyOptions.
      *
-     * @MongoDB\Field(type="int")
+     * @MongoDB\Field(type="int") @MongoDB\Index
      */
     protected $newsletterFrequency;
 
@@ -73,7 +73,7 @@ class User extends BaseUser
     /**
      * The date where the next newsletter has to be send.
      *
-     * @MongoDB\Field(type="date")
+     * @MongoDB\Field(type="date") @MongoDB\Index
      */
     protected $nextNewsletterDate;
 
@@ -146,7 +146,7 @@ class User extends BaseUser
 
     /**
      * @var bool
-     * @MongoDB\Field(type="boolean")
+     * @MongoDB\Field(type="boolean") @MongoDB\Index
      */
     protected $enabled;
 
@@ -196,7 +196,7 @@ class User extends BaseUser
 
     /**
      * @var Collection
-     * @MongoDB\ReferenceMany(targetDocument="App\Application\Sonata\UserBundle\Document\Group", cascade={"persist"})
+     * @MongoDB\ReferenceMany(targetDocument="App\Application\Sonata\UserBundle\Document\Group", cascade={"persist"}) @MongoDB\Index
      */
     protected $groups;
 
@@ -220,7 +220,7 @@ class User extends BaseUser
 
     /**
      * @var array
-     * @MongoDB\Field(type="hash")
+     * @MongoDB\Field(type="hash") @MongoDB\Index
      */
     protected $roles;
 
@@ -385,6 +385,12 @@ class User extends BaseUser
      * @MongoDB\Field(type="string")
      */
     protected $token;
+    
+    /**
+     * @var string
+     * @MongoDB\Field(type="string")
+     */
+    protected $codeInvitation;
 
     public function __construct()
     {
@@ -912,6 +918,17 @@ class User extends BaseUser
         return $this->communsData;
     }
 
+	public function getCodeInvitation()
+	{
+        return $this->codeInvitation;
+    }
+
+    public function setCodeInvitation($codeInvitation)
+	{
+        $this->codeInvitation = $codeInvitation;
+
+        return $this;
+    }
     /**
      * Get be notified by email when an Element need moderation
      */ 

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Document\Element;
 use Doctrine\ODM\MongoDB\DocumentManager;
+use App\Services\Utf8Encoder;
 
 class ElementImportMappingOntologyService
 {
@@ -37,11 +38,13 @@ class ElementImportMappingOntologyService
         }
         unset($mappedObject); // prevent edge case https://www.php.net/manual/fr/control-structures.foreach.php
 
-        $this->existingProps = $this->dm->get('Element')->findAllCustomProperties();
-        $this->existingProps = array_merge(Element::CORE_FIELDS, $this->existingProps);
-        $this->existingProps = array_map(function($e) { return strtolower($e); }, $this->existingProps);
+        $props = $this->dm->get('Element')->findAllCustomProperties();
+        $props = array_merge(Element::CORE_FIELDS, $props);
+        $this->existingProps = [];
+        foreach($props as $prop) {
+            $this->existingProps[slugify($prop)] = $prop;
+        }
         $this->collectedProps = [];
-
         foreach ($data as $row) {
             foreach ($row as $prop => $value) {
                 $this->collectProperty($prop, null, $import, $value);
@@ -65,10 +68,9 @@ class ElementImportMappingOntologyService
         $import->setOntologyMapping($this->ontologyMapping);
     }
 
-    private function slugProp($prop)
+    private function fixPropName($prop)
     {
-        $result = preg_replace('~(^bf_|_)~', '', $prop);
-        return str_replace('.', '', $result); // dots are not allawed in MongoDB hash keys
+        return str_replace('.', '', $prop); // dots are not allawed in MongoDB hash keys
     }
 
     // Collect an original property of the data imported
@@ -77,8 +79,8 @@ class ElementImportMappingOntologyService
         if (in_array($prop, ['__initializer__', '__cloner__', '__isInitialized__'])) {
             return;
         }
-        $prop = $this->slugProp($prop);
-        $parentProp = $this->slugProp($parentProp);
+        $prop = $this->fixPropName($prop);
+        $parentProp = $this->fixPropName($parentProp);
         $fullProp = $parentProp ? $parentProp.'/'.$prop : $prop;
 
         if (!is_string($value)) $value = "";
@@ -92,31 +94,31 @@ class ElementImportMappingOntologyService
         }
         if (!array_key_exists($fullProp, $this->ontologyMapping)) {
             // if prop with same name exist in the DB, map it directly to itself
-            $mappedProp = in_array(strtolower($prop), $this->existingProps) ? $prop : '';
+            $slugProp = strtolower(preg_replace('~(^bf_|_)~', '', $prop));
+            $mappedProp = $this->existingProps[$slugProp] ?? '';
+
             // handle some special cases
             if ($import->getSourceType() == 'osm') {
                 switch ($prop) {
-                    case 'source': $mappedProp = 'osm:source'; break; // we don't want to overide GoGoCarto source field with Osm field
-                    case 'opening_hours': $mappedProp = 'osm:opening_hours'; break;
-                    case 'version': $mappedProp = 'osm:version'; break;
-                    case 'timestamp': $mappedProp = 'osm:timestamp'; break;
-                    case 'type': $mappedProp = 'osm:type'; break;
+                    case 'source': $mappedProp = 'osm_source'; break; // we don't want to overide GoGoCarto source field with Osm field
+                    case 'opening_hours': $mappedProp = 'osm_opening_hours'; break;
+                    case 'version': $mappedProp = 'osm_version'; break;
+                    case 'timestamp': $mappedProp = 'osm_timestamp'; break;
+                    case 'type': $mappedProp = 'osm_type'; break;
+                    case 'osmUrl': $mappedProp = 'osm_url'; break;
                 }
             }
             // use alternative name, like lat instead of latitude
-            if (!$mappedProp && array_key_exists(strtolower($prop), $this->mappedCoreFields)) {
-                $mappedProp = $this->mappedCoreFields[strtolower($prop)];
+            if (!$mappedProp && array_key_exists($slugProp, $this->mappedCoreFields)) {
+                $mappedProp = $this->mappedCoreFields[$slugProp];
             }
             // Asign mapping
-            $alreadyMappedProperties = array_map(function($a) { return $a['mappedProperty']; }, $this->ontologyMapping);
-            if (!$mappedProp || !in_array($mappedProp, $alreadyMappedProperties)) {
-                $this->ontologyMapping[$fullProp] = [
-                    'mappedProperty' => $mappedProp,
-                    'collectedCount' => 1,
-                    'collectedValues' => [$value]
-                ];
-                $import->setNewOntologyToMap(true);
-            }
+            $this->ontologyMapping[$fullProp] = [
+                'mappedProperty' => $mappedProp,
+                'collectedCount' => 1,
+                'collectedValues' => [ $this->shortenValue($value) ]
+            ];
+            $import->setNewOntologyToMap(true);
         } else {
             // update count and values
             $this->ontologyMapping[$fullProp]['collectedCount']++;
@@ -124,12 +126,17 @@ class ElementImportMappingOntologyService
             $valuesCount = count($this->ontologyMapping[$fullProp]['collectedValues']);
             $numberValuesSaved = 10;
             if ($valuesCount < $numberValuesSaved) {
-                $this->ontologyMapping[$fullProp]['collectedValues'][] = $value;
+                $this->ontologyMapping[$fullProp]['collectedValues'][] = $this->shortenValue($value);
                 $this->ontologyMapping[$fullProp]['collectedValues'] = array_filter(array_unique($this->ontologyMapping[$fullProp]['collectedValues']),'strlen');
             } else if ($valuesCount == $numberValuesSaved) {
                 $this->ontologyMapping[$fullProp]['collectedValues'][] = '...';
             }
         }
+    }
+
+    private function shortenValue($value) 
+    {
+        return Utf8Encoder::toUTF8(substr($value, 0, 100));
     }
 
     public function mapOntology($data, $import)
@@ -139,7 +146,7 @@ class ElementImportMappingOntologyService
             $newRow = [];
             // Fix bad prop names
             foreach($row as $prop => $value) {
-                $data[$key][$this->slugProp($prop)] = $value;
+                $row[$this->fixPropName($prop)] = $value;
             }
 
             foreach ($mapping as $prop => $mappedObject) {
@@ -164,8 +171,8 @@ class ElementImportMappingOntologyService
 
             foreach ($mapping as $searchProp => $mappedObject) {
                 $mappedProp = $mappedObject['mappedProperty'];
-
             }
+
             // Add streetNumber into streetAddress
             if (isset($newRow['streetNumber']) && isset($newRow['streetAddress'])) {
                 $newRow['streetAddress'] = $newRow['streetNumber'].' '.$newRow['streetAddress'];

@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\Document\Element;
 use App\Document\ElementStatus;
 use App\Document\GoGoLogImport;
 use App\Document\ImportState;
 use App\Document\ModerationState;
-use App\Document\UserInteraction;
 use App\EventListener\TaxonomyJsonGenerator;
 use Doctrine\ODM\MongoDB\DocumentManager;
 use App\Services\Utf8Encoder;
@@ -26,24 +24,28 @@ class ElementImportService
     protected $errorsCount = [];
     protected $manuallyStarted = true;
 
+    const BATCH_SIZE = 25;
+
     /**
      * Constructor.
      */
     public function __construct(DocumentManager $dm, ElementImportOneService $importOneService,
                               ElementImportMappingService $mappingService,
                               TaxonomyJsonGenerator $taxonomyJsonGenerator,
-                              UserNotificationService $notifService)
+                              UserNotificationService $notifService,
+                              ElementDuplicatesService $duplicateService)
     {
         $this->dm = $dm;
         $this->importOneService = $importOneService;
         $this->mappingService = $mappingService;
         $this->taxonomyJsonGenerator = $taxonomyJsonGenerator;
         $this->notifService = $notifService;
+        $this->duplicateService = $duplicateService;
     }
 
     public function startImport($import, $manuallyStarted = true)
     {
-        $this->manuallyStarted = $manuallyStarted;
+        $this->manuallyStarted = filter_var($manuallyStarted, FILTER_VALIDATE_BOOLEAN);
         $this->countElementCreated = 0;
         $this->countElementUpdated = 0;
         $this->countElementNothingToDo = 0;
@@ -64,6 +66,9 @@ class ElementImportService
         }
     }
 
+    /**
+     * Import CSV
+     */
     public function importCsv($import, $onlyGetData = false)
     {
         list($header,$data) = $this->readCSV($import->getFilePath(), ',');
@@ -71,53 +76,36 @@ class ElementImportService
             // try with ; separtor
             list($header,$data) = $this->readCSV($import->getFilePath(), ';');
         }
-
-        if (!$data) {
-            return [];
-        }
-
-        if ($onlyGetData) {
-            return $data;
-        }
-
+        if (!$data) return [];
+        if ($onlyGetData)  return $data;
         return $this->importData($data, $import);
     }
-
     private function readCSv($fileName, $delimiter)
     {
-        $data = [];
-        $header = null;
+        $data = []; $header = null;
         if (false !== ($handle = fopen($fileName, 'r'))) {
             while (false !== ($row = fgetcsv($handle, 0, $delimiter))) {
                 $row = Utf8Encoder::toUTF8($row);
-                if (!$header) {
+                if (!$header) 
                     $header = $row;
-                } else {
-                    if (count($header) == count($row)) {
-                        $data[] = array_combine($header, $row);
-                    }
-                }
+                else if (count($header) == count($row))
+                    $data[] = array_combine($header, $row);
             }
             fclose($handle);
         }
         return [$header, $data];
     }
 
+    /**
+     * Import JSON
+     */
     public function importJson($import, $onlyGetData = false)
     {
-        $json = file_get_contents($import->getUrl());
+        $json = file_get_contents(str_replace(' ', '%20', $import->getUrl()), 0, stream_context_create(["http"=>["timeout"=>300]]));
         $data = json_decode($json, true);
-        if (null === $data) {
-            return null;
-        }
-
-        if ($onlyGetData) {
-            return $data;
-        }
-
-        $elementImportedCount = $this->importData($data, $import);
-
-        return $elementImportedCount;
+        if (null === $data) return null;
+        if ($onlyGetData) return $data;        
+        return $this->importData($data, $import);
     }
 
     // read the data and extract ontology and categories. After this operation, the user will be able
@@ -131,36 +119,40 @@ class ElementImportService
         return $this->mappingService->transform($data, $import);
     }
 
+    /**
+     * The real method to import. It go through each data provided (read from CSV or Json)
+     * And create/delete elements in gogocarto
+     */
     public function importData($data, $import)
     {
-        if (!$data) {
-            return 0;
-        }
+        if (!$data) return 0;
         try {
-            // Define the frequency for persisting the data and the current index of records
-            $batchSize = 100;
-            $i = 0;
-            $previouslyImportedElementIds = [];
-            $newlyImportedElementIds = [];
-            // do the mapping
+            // -----------------------------------
+            // Transform the data before importing
+            // -----------------------------------
             $data = $this->mappingService->transform($data, $import);
-
             $import->setCurrState(ImportState::InProgress);
             
-            $qb = $this->dm->query('Element');
-            if ($import->isDynamicImport()) {
-                $import->updateNextRefreshDate();
-
-                // before updating the source, we collect all elements ids
-                $previouslyImportedElementIds = $qb->field('source')->references($import)->getIds();
-            } else {
-                // before re importing a static source, we delete all previous items
-                $qb->remove()->field('source')->references($import)->execute();
-            }
-
+            // --------------
+            // Prepare Import
+            // --------------            
+            $startImportTimestamp = time();
+            $previouslyImportedElementIds = [];
+            $newlyImportedElementIds = [];
+            $createdElementIds = []; // the element ids created during this import
+            if ($import->isDynamicImport()) $import->updateNextRefreshDate();
+            // before updating the source, we collect all elements ids
+            $previouslyImportedElementIds = $this->dm->query('Element')
+                ->field('source')->references($import)->getIds();
+            $previouslyImportedElementIds = array_map(function($id) {
+                return strval($id); // fix some id are just numbers
+            }, $previouslyImportedElementIds);
             $this->importOneService->initialize($import);
-            $size = count($data);
-            // processing each data
+
+            // -----------------
+            // Process each data
+            // -----------------
+            $i = 0; $size = count($data);
             foreach ($data as $row) {
                 try {
                     $import->setCurrMessage("Importation des données $i/$size traitées");
@@ -173,7 +165,7 @@ class ElementImportService
                     
                     switch ($result['status']) {
                       case 'nothing_to_do': $this->countElementNothingToDo++; break;
-                      case 'created': $this->countElementCreated++; break;
+                      case 'created': $this->countElementCreated++; $createdElementIds[] = $result['id']; break;
                       case 'updated': $this->countElementUpdated++; break;
                       case 'no_category': $this->countNoCategoryPreventImport++; break;
                     }
@@ -184,39 +176,47 @@ class ElementImportService
                         $this->elementIdsErrors[] = ''.$row['id'];
                         $newlyImportedElementIds[] = ''.$row['id'];
                     }
-
-                    if (!array_key_exists($e->getMessage(), $this->errorsCount)) {
-                        $this->errorsCount[$e->getMessage()] = 1;
+                    $msgCode = $e->getMessage() && strlen($e->getMessage()) > 0 ? $e->getMessage() : 'error';
+                    if (!array_key_exists($msgCode, $this->errorsCount)) {
+                        $this->errorsCount[$msgCode] = 1;
                     } else {
-                        ++$this->errorsCount[$e->getMessage()];
+                        ++$this->errorsCount[$msgCode];
                     }
-                    $message = '<u>'.$e->getMessage().'</u> <b>(x'.$this->errorsCount[$e->getMessage()].')</b></br>'.$e->getFile().' LINE '.$e->getLine().'</br>';
+                    $message = '<u>'.$e->getMessage().'</u> <b>(x'.$this->errorsCount[$msgCode].')</b></br>'.$e->getFile().' LINE '.$e->getLine().'</br>';
                     $message .= 'CONTEXT : <pre>'.print_r($row, true).'</pre>';
-                    $this->errorsMessages[$e->getMessage()] = $message;
+                    $this->errorsMessages[$msgCode] = $message;
                 }
 
-                if (1 === ($i % $batchSize)) {
-                    $this->dm->flush();
-                    $this->dm->clear();
-                    // After flush, we need to get again the import from the DB to avoid doctrine raising errors
-                    $import = $this->dm->get('Import')->find($import->getId());
-                    $this->dm->persist($import);
-                }
+                if (0 === ($i % self::BATCH_SIZE)) $import = $this->batchFlush($import);
             }
-
-            $this->dm->flush();
-            $this->dm->clear();
-
-            $import = $this->dm->get('Import')->find($import->getId());
+            $import = $this->batchFlush($import);
             $import->setLastRefresh(time());
-            $this->dm->persist($import);
 
+            // ----------------------------------
+            // Remove Elements no longer imported
+            // ----------------------------------
+            $countElemenDeleted = 0;
+            $elementIdsToDelete = array_diff($previouslyImportedElementIds, $newlyImportedElementIds);
+            // first get proper count (without ElementPendingVersion which are misleading)
+            $countElemenDeleted = $this->dm->query('Element')
+                ->field('source')->references($import)
+                ->field('status')->notEqual(ElementStatus::ModifiedPendingVersion)
+                ->field('id')->in($elementIdsToDelete)
+                ->getCount();
+            // delete elements
+            $this->dm->query('Element')
+                ->field('source')->references($import)
+                ->field('id')->in($elementIdsToDelete)
+                ->batchRemove();
+            $this->dm->persist($import); // batch remove call a dm->clear so need to eprsist again
+
+            // ---------------------------------
             // Link elements between each others
+            // ---------------------------------
             $config = $this->dm->get('Configuration')->findConfiguration();
             $elementsLinkedFields = [];
             foreach($config->getElementFormFields() as $field) {
-                if ($field->type === 'elements' && in_array($field->name, $import->getMappedProperties()))
-                {
+                if ($field->type === 'elements' && in_array($field->name, $import->getMappedProperties())) {
                     $elementsLinkedFields[] = $field->name;
                     // resetting the reversed field to it will be filled correctly
                     if (isset($field->reversedBy)) {
@@ -224,18 +224,17 @@ class ElementImportService
                         $qb->field('source')->references($import)
                            ->updateMany()
                            ->field("data.$field->reversedBy")->unsetField()
-                           ->execute();
+                           ->execute();                        
                     }
                 }
             }
-
-            if (count($elementsLinkedFields) > 0) {
-                // Go through each individual imported elements, and link elements from each other
+            $this->dm->flush(); // execute the unsetField queries
+            // Go through each individual imported elements, and link elements from each other
+            if (count($elementsLinkedFields) > 0) {                
                 $importedElements = $this->dm->query('Element')
                     ->field('source')->references($import)
                     ->execute();
-                $i = 0;
-                $size = count($importedElements);
+                $i = 0; $size = count($importedElements);
                 foreach ($elementsLinkedFields as $linkField) {
                     foreach ($importedElements as $element) {
                         $import->setCurrMessage("Calcul des liens pour le champ '$linkField' : $i/$size éléments traitées");
@@ -253,53 +252,48 @@ class ElementImportService
                                 if (count($result) > 0) $element->setCustomProperty($linkField, $result);
                             }
                         }
-                        ++$i;
-                        if (1 === ($i % $batchSize)) {
-                            $this->dm->flush();
-                            $this->dm->clear();
-                            // After flush, we need to get again the import from the DB to avoid doctrine raising errors
-                            $import = $this->dm->get('Import')->find($import->getId());
-                            $this->dm->persist($import);
-                        }
+                        if (0 === (++$i % self::BATCH_SIZE)) $import = $this->batchFlush($import);
                     }
                 }
-                $this->dm->flush();
-                $this->dm->clear();
-
-                // After flush, we need to get again the import from the DB to avoid doctrine raising errors
-                $import = $this->dm->get('Import')->find($import->getId());
-                $this->dm->persist($import);
+                $import = $this->batchFlush($import);
             }
 
-            $countElemenDeleted = 0;
-            if ($import->isDynamicImport()) {
-                $qb = $this->dm->query('Element');
-                $elementIdsToDelete = array_diff($previouslyImportedElementIds, $newlyImportedElementIds);
-                // first get proper count (without ElementPendingVersion which are misleading)
-                $countElemenDeleted = $qb->field('source')->references($import)
-                                         ->field('status')->notEqual(ElementStatus::ModifiedPendingVersion)
-                                         ->field('id')->in($elementIdsToDelete)
-                                         ->count()->execute();
-                // delete elements
-                $qb = $this->dm->query('Element');
-                $qb->field('source')->references($import)
-                   ->field('id')->in($elementIdsToDelete)
-                   ->remove()->execute();
-                // delete linked object cause doctrine cascading do not work when deleting with queryBuilder
-                $qb = $this->dm->createQueryBuilder(UserInteraction::class);
-                $qb->field('element.id')->in($elementIdsToDelete)->remove()->execute();
-            }
+            // -----------------
+            // Detect Duplicates
+            // -----------------
+            $automaticMergesCount = 0;
+            $potentialDuplicatesCount = 0;
+            if ($config->getDuplicates()->getDetectAfterImport() && $createdElementIds > 0) {
+                $elements = $this->dm->query('Element')
+                    ->field('source')->references($import)
+                    ->field('createdAt')->gt(new \MongoDate($startImportTimestamp))
+                    ->getCursor();
+                $i = 0; $size = $elements->count();
+                foreach($elements as $element) {
+                    $import->setCurrMessage("Détection des doublons : $i/$size éléments traitées");
+                    $result = $this->duplicateService->detectDuplicatesFor($element);
+                    if ($result && $result['automaticMerge']) ++$automaticMergesCount;
+                    if ($result && !$result['automaticMerge']) ++$potentialDuplicatesCount;
+                    if (0 === (++$i % self::BATCH_SIZE)) $import = $this->batchFlush($import);
+                }
+                $import = $this->batchFlush($import);
+            }            
 
-            $qb = $this->dm->query('Element');
-            $totalCount = $qb->field('status')->notEqual(ElementStatus::ModifiedPendingVersion)
-                             ->field('source')->references($import)
-                             ->count()->execute();
-
-            $qb = $this->dm->query('Element');
-            $elementsMissingGeoCount = $qb->field('source')->references($import)->field('moderationState')->equals(ModerationState::GeolocError)->count()->execute();
-            $qb = $this->dm->query('Element');
-            $elementsMissingTaxoCount = $qb->field('source')->references($import)->field('moderationState')->equals(ModerationState::NoOptionProvided)->count()->execute();
-
+            // -----------
+            // Create Logs
+            // -----------
+            $totalCount = $this->dm->query('Element')
+                ->field('status')->notEqual(ElementStatus::ModifiedPendingVersion)
+                ->field('source')->references($import)
+                ->getCount();
+            $elementsMissingGeoCount = $this->dm->query('Element')
+                ->field('source')->references($import)
+                ->field('moderationState')->equals(ModerationState::GeolocError)
+                ->getCount();
+            $elementsMissingTaxoCount = $this->dm->query('Element')
+                ->field('source')->references($import)
+                ->field('moderationState')->equals(ModerationState::NoOptionProvided)
+                ->getCount();
             $logData = [
                 'elementsCount' => $totalCount,
                 'elementsCreatedCount' => $this->countElementCreated,
@@ -310,22 +304,26 @@ class ElementImportService
                 'elementsPreventImportedNoTaxo' => $this->countNoCategoryPreventImport,
                 'elementsDeletedCount' => $countElemenDeleted,
                 'elementsErrorsCount' => $this->countElementErrors,
+                'automaticMergesCount' => $automaticMergesCount,
+                'potentialDuplicatesCount' => $potentialDuplicatesCount,
                 'errorMessages' => $this->errorsMessages,
             ];
-
             $totalErrors = $elementsMissingGeoCount + $elementsMissingTaxoCount + $this->countElementErrors;
             $logLevel = $totalErrors > 0 ? ($totalErrors > ($size / 4) ? 'error' : 'warning') : 'success';
-
             $message = 'Import de '.$import->getSourceName().' terminé';
             if ('success' != $logLevel) {
                 $message .= ', mais avec des problèmes !';
             }
-
             $log = new GoGoLogImport($logLevel, $message, $logData);
+            $this->dm->persist($log);
+            $this->dm->flush(); // flush the log before the import, because some time the log save fails but not the import which leads in broken relation
             $import->addLog($log);
-
             $import->setCurrState($totalErrors > 0 ? ($totalErrors == $size ? ImportState::Failed : ImportState::Errors) : ImportState::Completed);
             $import->setCurrMessage($log->displayMessage());
+            
+            // ------------
+            // Notify Users
+            // ------------
             if ($import->isDynamicImport() && !$this->manuallyStarted) {
                 if ($totalErrors > 0) {
                     $this->notifService->notifyImportError($import);
@@ -344,5 +342,14 @@ class ElementImportService
         }
 
         return $message;
+    }
+
+    private function batchFlush($import) {
+        $this->dm->flush();
+        $this->dm->clear();
+        // After dm->clear, we need to get again the import from the DB to avoid doctrine raising errors
+        $import = $this->dm->get('Import')->find($import->getId());
+        $this->dm->persist($import);
+        return $import;
     }
 }

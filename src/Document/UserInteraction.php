@@ -25,6 +25,7 @@ abstract class UserRoles
     const Loggued = 2;
     const Admin = 3;
     const AnonymousWithHash = 4;
+    const GoGoBot = 5;
 }
 
 /** @MongoDB\Document */
@@ -62,6 +63,7 @@ class UserInteraction
      * @var \stdClass
      *
      * Elements related to this interaction
+     * @MongoDB\Index
      * @MongoDB\ReferenceOne(targetDocument="App\Document\Element")
      */
     protected $element;
@@ -87,7 +89,7 @@ class UserInteraction
     /**
      * @var date
      *
-     * @MongoDB\Field(type="date")
+     * @MongoDB\Field(type="date") @MongoDB\Index
      * @Gedmo\Timestampable(on="create")
      */
     protected $createdAt;
@@ -95,7 +97,7 @@ class UserInteraction
     /**
      * @var date
      *
-     * @MongoDB\Field(type="date")
+     * @MongoDB\Field(type="date") @MongoDB\Index
      */
     protected $updatedAt;
 
@@ -118,14 +120,17 @@ class UserInteraction
 
     public function isAdminContribution()
     {
-        return UserRoles::Admin == $this->getUserRole();
+        return $this->getUserRole() == UserRoles::Admin || 
+               $this->getUserRole() == UserRoles::GoGoBot && $this->getType() == InteractionType::Import;
     }
 
-    public function updateUserInformation($securityContext, $email = null, $directModerationWithHash = false)
+    public function updateUserInformation($securityContext, $email = null, $directModerationWithHash = false, $automatic = false)
     {
         $user = $securityContext->getToken() ? $securityContext->getToken()->getUser() : null;
         $user = is_object($user) ? $user : null;
-        if ($user) {
+        if ($automatic) {
+            $this->setUserRole(UserRoles::GoGoBot);
+        } else if ($user) {
             $this->setUserEmail($user->getEmail());
             $this->setUserRole($user->isAdmin() ? UserRoles::Admin : UserRoles::Loggued);
         } else {
@@ -142,11 +147,13 @@ class UserInteraction
         }
     }
 
-    public function updateResolvedBy($securityContext, $email = null, $directModerationWithHash = false)
+    public function updateResolvedBy($securityContext, $email = null, $directModerationWithHash = false, $automatic = false)
     {
         $user = $securityContext->getToken() ? $securityContext->getToken()->getUser() : null;
         $user = is_object($user) ? $user : null;
-        if ($user) {
+        if ($automatic) {
+            $this->setResolvedBy('GoGoBot');
+        } else if ($user) {
             $this->setResolvedBy($user->getEmail());
         } else {
             if ($email) {
@@ -171,7 +178,7 @@ class UserInteraction
 
     public function getUserDisplayName()
     {
-        return UserRoles::Anonymous == $this->getUserRole() ? '' : $this->getUserEmail();
+        return in_array($this->getUserRole(), [UserRoles::Anonymous, UserRoles::GoGoBot]) ? '' : $this->getUserEmail();
     }
 
     // used for Report and Vote children class. Overwrite this function like in UserInteractionContribution
@@ -191,11 +198,10 @@ class UserInteraction
 
     protected function formatDate($date)
     {
-        if (!$this->getCreatedAt()) {
+        if (!$date) {
             return '';
         }
-
-        return date_format($this->getCreatedAt(), 'd/m/Y à H:i');
+        return $date->format(\DateTime::ATOM);
     }
 
     // ------------------------ GETTER AND SETTERS ----------------------------

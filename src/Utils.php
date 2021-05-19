@@ -20,9 +20,9 @@ function endsWith( $haystack, $needle ) {
    return substr( $haystack, -$length ) === $needle;
 }
 
-function slugify($text) {
-    $text = strtolower($text); // lowercase
-    // replace non letter or digits by -
+function slugify($text, $lowercase = true) {
+    if ($lowercase) $text = strtolower($text); // lowercase
+    
     $text = str_replace('é', 'e', $text);
     $text = str_replace('è', 'e', $text);
     $text = str_replace('ê', 'e', $text);
@@ -31,13 +31,10 @@ function slugify($text) {
     $text = str_replace('à', 'a', $text);
     $text = str_replace('â', 'a', $text);
     $text = str_replace('î', 'i', $text);
-    $text = preg_replace('~[^\pL\d]+~u', '-', $text);
-
     $text = iconv('utf-8', 'us-ascii//TRANSLIT', $text); // transliterate
-    $text = preg_replace('~[^-\w]+~', '', $text); // remove unwanted characters
-    $text = trim($text, '-'); // trim
-    $text = rtrim($text, 's'); // remove final "s" for plural
-    $text = preg_replace('~-+~', '-', $text); // remove duplicate -
+    $text = preg_replace('~[^\pL\d]+~u', '_', $text); // replace non letter by _
+    $text = trim($text, '_'); // trim
+    $text = preg_replace('~_+~', '_', $text); // remove duplicate -
 
     if (empty($text)) {
         return '';

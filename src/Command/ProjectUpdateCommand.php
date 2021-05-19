@@ -4,6 +4,7 @@ namespace App\Command;
 
 use App\Services\AsyncService;
 use App\Services\DocumentManagerFactory;
+use App\EventListener\ConfigurationListener;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -24,11 +25,12 @@ class ProjectUpdateCommand extends Command
     ];
 
     public function __construct(DocumentManagerFactory $dmFactory, LoggerInterface $commandsLogger,
-                                AsyncService $asyncService)
+                                AsyncService $asyncService, ConfigurationListener $confService)
     {
         $this->dmFactory = $dmFactory;
         $this->asyncService = $asyncService;
         $this->logger = $commandsLogger;
+        $this->confService = $confService;
         parent::__construct();
     }
 
@@ -53,28 +55,32 @@ class ProjectUpdateCommand extends Command
             }
 
             if ($project !== null) {
+                $this->logger->info("---- PROJECT {$project->getDbName()} : Update infos & run daily commands");
+
                 // Updating next execution time
                 $dateNow = new \DateTime();
                 $dateNow->setTimestamp(time());
                 $interval = new \DateInterval('PT24H');
                 $project->setNextUpdateAt($dateNow->add($interval));
-                // Update Project Info - return false means the project is wrongly configured, like without config
-                if (!$this->updateProjectInfo($project)) {
-                    return;
-                }
 
                 $rootDm->persist($project);
                 $rootDm->flush();
 
-                $this->logger->info("---- PROJECT {$project->getDbName()} : Update infos & run daily commands");
+                // Update Project Info - return false means the project is wrongly configured, like without config
+                $result = $this->updateProjectInfo($project);
+
+                $rootDm->flush();
+
+                if (!$result) {
+                    $this->logger->error('Error while update project info');
+                    return;   
+                }             
 
                 // run daily commands
                 $this->asyncService->setRunSynchronously(true);
                 foreach(self::DAILY_COMMANDS as $commandName) {
                     $this->asyncService->callCommand($commandName, [], $project->getDbName());
                 }
-            } else {
-                $this->logger->error("PROJECT is null");
             }
         } catch (\Exception $e) {
             $this->logger->error($e->getMessage());
@@ -83,38 +89,52 @@ class ProjectUpdateCommand extends Command
 
     private function updateProjectInfo($project)
     {
-        $dm = $this->dmFactory->createForDB($project->getDbName());
+        try {
+            $dm = $this->dmFactory->createForDB($project->getDbName());
 
-        $config = $dm->get('Configuration')->findConfiguration();
-        if (!$config) {
-            $this->logger->error("Project {$project->getDomainName()} does not have config");
+            $config = $dm->get('Configuration')->findConfiguration();
+            if (!$config) {
+                $this->logger->error("Project {$project->getDomainName()} does not have config");
+                return false;
+            }
+
+            // ensure index are up to date
+            // $dm->getSchemaManager()->updateIndexes();
+            // $this->confService->manuallyUpdateIndex($dm);
+            
+            $img = $config->getSocialShareImage() ? $config->getSocialShareImage() : $config->getLogo();
+            $imageUrl = $img ? $img->getImageUrl() : null;
+            $dataSize = $dm->get('Element')->findVisibles(true);
+
+            $qb = $dm->query('User');
+            $users = $qb->addOr($qb->expr()->field('roles')->exists(true))
+                        ->addOr($qb->expr()->field('groups')->exists(true))
+                        ->getArray();
+            $adminEmails = [];
+            $lastLogin = null;
+            foreach ($users as $key => $user) {
+                if ($user->isAdmin()) $adminEmails[] = $user->getEmail();
+                if (!$lastLogin || $user->getLastLogin() > $lastLogin) $lastLogin = $user->getLastLogin();
+            }
+            $haveWebhooks = $dm->query('Webhook')->count()->execute() > 0
+                        || $dm->query('Import')->field('isSynchronized')->equals(true)->getCount() > 0;
+            $haveNewsletter = $config->getNewsletterMail() && $config->getNewsletterMail()->getActive()
+                        && $dm->query('User')->field('newsletterFrequency')->gt(0)->getCount() > 0;
+            
+            $project->setName($config->getAppName());
+            $project->setImageUrl($imageUrl);
+            $project->setDescription($config->getAppBaseline());
+            $project->setDataSize($dataSize);
+            $project->setAdminEmails(implode(',', $adminEmails));
+            $project->setPublished($config->getPublishOnSaasPage());
+            if ($lastLogin) $project->setLastLogin($lastLogin);
+            else $project->setLastLogin($project->getCreatedAt());
+            $project->setHaveWebhooks($haveWebhooks);
+            $project->setHaveNewsletter($haveNewsletter);
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error($e->getMessage());
             return false;
         }
-        $img = $config->getSocialShareImage() ? $config->getSocialShareImage() : $config->getLogo();
-        $imageUrl = $img ? $img->getImageUrl() : null;
-        $dataSize = $dm->get('Element')->findVisibles(true);
-
-        $users = $dm->get('User')->findAll();
-        $adminEmails = [];
-        $lastLogin = null;
-        foreach ($users as $key => $user) {
-            if ($user->isAdmin()) $adminEmails[] = $user->getEmail();
-            if (!$lastLogin || $user->getLastLogin() > $lastLogin) $lastLogin = $user->getLastLogin();
-        }
-        $haveWebhooks = $dm->query('Webhook')->count()->execute() > 0
-                     || $dm->query('Import')->field('isSynchronized')->equals(true)->getCount() > 0;
-        $haveNewsletter = $config->getNewsletterMail()->getActive()
-                       && $dm->query('User')->field('newsletterFrequency')->gt(0)->getCount() > 0;
-        
-        $project->setName($config->getAppName());
-        $project->setImageUrl($imageUrl);
-        $project->setDescription($config->getAppBaseline());
-        $project->setDataSize($dataSize);
-        $project->setAdminEmails(implode(',', $adminEmails));
-        $project->setPublished($config->getPublishOnSaasPage());
-        if ($lastLogin) $project->setLastLogin($lastLogin);
-        $project->setHaveWebhooks($haveWebhooks);
-        $project->setHaveNewsletter($haveNewsletter);
-        return true;
     }
 }

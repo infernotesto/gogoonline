@@ -56,8 +56,8 @@
 {% block logo %}
     {% spaceless %}
         <a class="logo" href="{{ path('sonata_admin_dashboard') }}">
-            <img src="{{ asset('img/default-icon.png') }}">
-            <span>GoGoCarto Administration</span>
+            <img src="{{ asset('img/com-lm-kf.png') }}">
+            <span>Espace Administrateur</span>
             {% set newMsgsCount = new_msgs_count() %}
             {% if newMsgsCount > 0 %}
                 <label class="label label-info" style="margin-left: 6px">
@@ -96,6 +96,9 @@
     {# CUSTOM Menu #}
     <ul class="sidebar-menu">
         {% if is_granted("ROLE_ADMIN") or is_granted("ROLE_SUPER_ADMIN") %}
+            <li>
+                <a href="{{ path('gogo_core_key') }}"><i class="fa fa-key"></i><span>Créer une clé d'activation</span></a>
+            </li>
             <li class="first treeview">
                 <a href="{{ path('gogo_bulk_actions_index') }}"><i class="fa fa-bullhorn"></i><span>Actions de masse</span></a>
             </li>

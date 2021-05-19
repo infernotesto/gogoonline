@@ -39,7 +39,7 @@ class RegistrationController extends FosController
         $this->tokenStorage = $tokenStorage;
         $this->mailer = $mailer;
         $this->dm = $dm;
-        $this->geocoder = $geocoder->using('google_maps');
+        $this->geocoder = $geocoder->using('nominatim');
     }
 
     /**
@@ -87,8 +87,15 @@ class RegistrationController extends FosController
                 }
             }
 
+            $codeInvitationExist = false;
+            $userCodeInvitation = $user->getCodeInvitation();
+            $repository = $this->dm->get('CodeInvitation');
+            $codeInvitationExist = $repository->codeInvitationIsValid($userCodeInvitation);
+
+            
+
             // CHECK FORM IS VALID
-            if ($form->isValid() && !$locationSetToReceiveNewsletter && !$geocodeError) {
+            if ($form->isValid() && !$locationSetToReceiveNewsletter && !$geocodeError && $codeInvitationExist) {  
 
                 if ($confirmationEnabled) {
                     // SEND CONFIRM EMAIL
@@ -116,6 +123,9 @@ class RegistrationController extends FosController
                 }
                 if ($geocodeError) {
                     $form->get('location')->addError(new FormError('Impossible de localiser cette adresse'));
+                }
+                if(!$codeInvitationExist){
+                    $form->get('codeInvitation')->addError(new FormError('Code invalide, veuillez contacter un administrateur'));
                 }
                 $this->eventDispatcher->dispatch(FOSUserEvents::REGISTRATION_FAILURE, $event);
             }

@@ -8,10 +8,10 @@ GIT           = git
 GULP          = gulp
 YARN          = yarn
 DOCKER        = docker-compose
-DOCKER_COMPOSE= $$( if [ -f docker/docker-compose.local.yml ]; then \
-		echo docker/docker-compose.local.yml; \
+DOCKER_COMPOSE= $$( if [ -f docker-compose.local.yml ]; then \
+		echo docker-compose.local.yml; \
 	else \
-		echo docker/docker-compose.yml; \
+		echo docker-compose.yml; \
 	fi )
 .DEFAULT_GOAL = help
 
@@ -39,32 +39,21 @@ warmup: ## Warmump the cache
 	$(SYMFONY) cache:warmup
 
 fix-perms: ## Fix permissions of all var files
-	chown -R www-data var/cache
-	chown -R www-data var/log
-	chown -R www-data var/sessions
-	chown -R www-data web/uploads
 	chmod 777 -R var/
-	sleep 10 && chmod 777 -R var/ &
-	sleep 60 && chmod 777 -R var/ &
-	sleep 120 && chmod 777 -R var/ &
-	sleep 300 && chmod 777 -R var/ &
-	sleep 600 && chmod 777 -R var/ &
-	sleep 2000 && chmod 777 -R var/ &
 
 install-assets: ## Install the assets
 	$(SYMFONY) assets:install web/ --symlink
 
 purge: ## Purge cache
 	rm -rf var/cache/* 
-	make fix-perms
 
 ## —— Yarn —————————————————
 yarn-install: yarn.lock ## Install npm vendors according to the current yarn.lock file
 	$(YARN) install
 
 build: ## Build the assets
-	$(GULP) build
 	$(YARN) encore dev
+	$(GULP) build	
 
 watch:
 	$(GULP) watch &
@@ -90,7 +79,7 @@ shell: ## Start shell inside Docker
 commands: ## Display all commands in the project namespace
 	$(SYMFONY) list $(PROJECT)
 
-init: install assets load-fixtures fix-perms ## Initialize the project
+init: install assets load-fixtures purge fix-perms ## Initialize the project
 
 install: composer-install yarn-install ## Install vendors
 
@@ -126,16 +115,25 @@ log-commands-error:
 
 ## —— Deploy & Prod ———————
 gogo-update: ## Update a PROD server to the lastest version of gogocarto
-	service cron stop
+	sudo /usr/bin/systemctl stop cron
 	$(GIT) reset --hard master
 	$(GIT) pull origin master
 	make show-deploy-message
 	COMPOSER_MEMORY_LIMIT=-1 $(COMPOSER) install
 	$(YARN) install
+	$(YARN) encore production	
 	$(GULP) build
-	$(GULP) production
-	$(YARN) encore production		
-	$(SYMFONY) db:migrate
+	$(GULP) production	
+	make purge	
+	$(SYMFONY) db:migrate	
+	make hide-deploy-message
+	sudo /usr/bin/systemctl start cron
+
+gogo-quick-update:
+	sudo /usr/bin/systemctl stop cron
+	$(GIT) reset --hard master
+	$(GIT) pull origin master
+	make show-deploy-message
 	make purge
 	make hide-deploy-message
-	service cron start
+	sudo /usr/bin/systemctl start cron

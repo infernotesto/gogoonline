@@ -107,6 +107,7 @@ class ElementActionService
         if ($sendMail) {
             $this->mailService->sendAutomatedMail('add', $element, $message);
         }
+        $element->setDuplicateOf(null); // reset this field
         $element->updateTimestamp();
     }
 
@@ -122,20 +123,6 @@ class ElementActionService
             }
         } elseif ($addContribution) {
             $this->addContribution($element, $message, InteractType::ModerationResolved, $element->getStatus());
-        }
-
-        // Dealing with potential duplicates
-        if (ModerationState::PotentialDuplicate == $element->getModerationState()) {
-            if ($element->getIsDuplicateNode()) {
-                $element->setIsDuplicateNode(false);
-                $element->clearPotentialDuplicates();
-            } else {
-                $potentialOwners = $this->dm->get('Element')->findPotentialDuplicateOwner($element);
-                foreach ($potentialOwners as $key => $owner) {
-                    $this->dm->persist($owner);
-                    $owner->removePotentialDuplicate($element);
-                }
-            }
         }
 
         $element->updateTimestamp();

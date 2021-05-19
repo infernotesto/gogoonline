@@ -142,6 +142,15 @@ class Import extends AbstractFile
     private $customCode = '<?php';
 
     /**
+     * Custom code made by the user to be run on each $element when exporting.
+     * This Is used in the cas of an OSM export for example, when we convert back
+     * The gogocarto data into an osm feature
+     *
+     * @MongoDB\Field(type="string")
+     */
+    private $customCodeForExport = '<?php';
+
+    /**
      * @var date
      *
      * @MongoDB\Field(type="date")
@@ -164,6 +173,8 @@ class Import extends AbstractFile
      * @MongoDB\Field(type="bool")
      */
     private $moderateElements = false;
+
+    public $warnUserThatDuplicatesWillBeDetectedAndAutoMerged = false;
 
     public function __construct()
     {
@@ -195,11 +206,15 @@ class Import extends AbstractFile
      */
     public function validate(ExecutionContextInterface $context)
     {
-        if (preg_match('/new |process|mongo|this|symfony|exec|passthru|shell_exec|system|proc_open|popen|curl_exec|curl_multi_exec|parse_ini_file|show_source|var_dump|print_r/i', $this->customCode)) {
-            $context->buildViolation("Il est interdit d'utiliser les mots suivants: new , process, mongo, this, symfony, exec, passthru, shell_exec, system, proc_open, popen, curl_exec, curl_multi_exec, parse_ini_file, show_source, var_dump, print_r... Merci de ne pas faire de betises !")
-                ->atPath('customCode')
-                ->addViolation();
+        $codeFields = ['customCode' => $this->customCode, 'customCodeForExport' => $this->customCodeForExport];
+        foreach($codeFields as $field => $value) {
+            if (preg_match('/new |process|mongo|this|symfony|exec|passthru|shell_exec|system|proc_open|popen|curl_exec|curl_multi_exec|parse_ini_file|show_source|var_dump|print_r/i', $value)) {
+                $context->buildViolation("Il est interdit d'utiliser les mots suivants: new , process, mongo, this, symfony, exec, passthru, shell_exec, system, proc_open, popen, curl_exec, curl_multi_exec, parse_ini_file, show_source, var_dump, print_r... Merci de ne pas faire de betises !")
+                    ->atPath($field)
+                    ->addViolation();
+            }
         }
+        
     }
 
     public function setSourceType($sourceType)
@@ -209,10 +224,15 @@ class Import extends AbstractFile
     }
     public function getSourceType()
     {
-        if ($this->sourceType) return $this->sourceType;
+        if (isset($this->sourceType)) return $this->sourceType;
         if (isset($this->osmQueriesJson)) return 'openstreetmap';
         if ($this->url) return 'json';
         if ($this->file) return 'csv';
+    }
+
+    public function isHandlingCategories()
+    {
+        return count($this->taxonomyMapping) > 0 || count($this->optionsToAddToEachElement) > 0;
     }
 
     /**
@@ -478,7 +498,7 @@ class Import extends AbstractFile
      */
     public function getFieldToCheckElementHaveBeenUpdated()
     {
-        if ($this->getSourceType() == 'osm') return 'osm:version';
+        if ($this->getSourceType() == 'osm') return 'osm_version';
         return $this->fieldToCheckElementHaveBeenUpdated ?? 'updateAt';
     }
 
@@ -493,8 +513,12 @@ class Import extends AbstractFile
     {
         if ($ontologyMapping == null) return;
         foreach($ontologyMapping as $key => $mappedObject) { 
-            if (is_string($mappedObject)) {
-                $ontologyMapping[$key] = array_merge($this->ontologyMapping[$key], ['mappedProperty' => $mappedObject]);
+            if ($key && strlen($key) > 0) { // Mongo does not authorize saving empty key
+                if (is_string($mappedObject)) {
+                    $ontologyMapping[$key] = array_merge($this->ontologyMapping[$key], ['mappedProperty' => $mappedObject]);
+                } else {
+                    $ontologyMapping[$key]['mappedProperty'] = slugify($mappedObject['mappedProperty'], false);
+                }
             }
         }
         $this->ontologyMapping = $ontologyMapping;
@@ -543,12 +567,17 @@ class Import extends AbstractFile
     public function setTaxonomyMapping($taxonomyMapping)
     {
         if ($taxonomyMapping == null) return;
+        $newMapping = [];
         foreach($taxonomyMapping as $key => $mappedObject) { 
-            if (!is_associative_array($mappedObject)) {
-                $taxonomyMapping[$key] = array_merge($this->taxonomyMapping[$key], ['mappedCategoryIds' => $mappedObject]);
-            }
+            if ($key && strlen($key) > 0) {
+                if (!is_associative_array($mappedObject)) {
+                    $newMapping[$key] = array_merge($this->taxonomyMapping[$key], ['mappedCategoryIds' => $mappedObject]);
+                } else {
+                    $newMapping[$key] = $mappedObject;
+                }
+            }            
         }
-        $this->taxonomyMapping = $taxonomyMapping;
+        $this->taxonomyMapping = $newMapping;
 
         return $this;
     }
@@ -601,6 +630,30 @@ class Import extends AbstractFile
     public function getCustomCode()
     {
         return $this->customCode;
+    }
+
+    /**
+     * Set customCodeForExport.
+     *
+     * @param string $customCodeForExport
+     *
+     * @return $this
+     */
+    public function setCustomCodeForExport($customCodeForExport)
+    {
+        $this->customCodeForExport = $customCodeForExport;
+
+        return $this;
+    }
+
+    /**
+     * Get customCodeForExport.
+     *
+     * @return string $customCodeForExport
+     */
+    public function getCustomCodeForExport()
+    {
+        return $this->customCodeForExport;
     }
 
     /**

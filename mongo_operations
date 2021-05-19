@@ -3,7 +3,7 @@ apt upgrade
 
 http://localhost/GoGoCarto/web/app_dev.php/elements/update-colibris-lmc/export_lmc_1.csv
 
-use gogocarto_default
+use projetdustage-5218
 db.Element.deleteMany({"sourceKey":"LMC"})
 
 db.Element.updateMany({"sourceKey":"gogocarto"}, {$set: {"sourceKey":"PDCN"}})
@@ -33,6 +33,29 @@ db.Element.aggregate(
     {"$match": { "_id" :{ "$ne" : null } , "count" : {"$gt": 1} } },
     {"$project": {"name" : "$_id", "_id" : 0, "uniqueIds" : "$uniqueIds", "status": "$status"} }
 )
+
+db.User.aggregate(
+    {"$group": { "_id": "$emailCanonical", uniqueIds: { $addToSet: "$_id" },"count": { "$sum": 1 } } },
+    {"$match": { "_id" : { "$ne" : null } , "count" : {"$gt": 1} } },
+    {"$sort": {"count": -1}},
+    {"$project": {"value" : "$_id", "_id" : 0, "ids" : "$uniqueIds", "count": "$count"} }
+).forEach(function(result){
+  var users = db.User.find({_id: { $in: result.ids}}).sort({lastLogin: -1});
+  var userToKeep;
+  users.forEach(function(user) {
+    if (!userToKeep) {
+      userToKeep = user;
+      print("\n\n\nKeep user " + user.usernameCanonical + ' / ' + user.email);
+    } else {
+      print("  -> Merge with " + user.usernameCanonical + ' / ' + user.email);
+      for(var key in user) {
+        if (!userToKeep[key]) { userToKeep[key] = user[key]; }
+      };
+      db.User.remove(user);
+    }
+  });
+  db.User.save(userToKeep);
+});
 
 db.Element.aggregate([
    {
@@ -75,7 +98,7 @@ db.User.find({'email': { $ne: '' }},{'mail':1, '_id':0}).forEach(function(x){
   print(x.email+",");
 });
 # then run
-mongo gogocarto_default script.js > export.csv
+mongo projetdustage-5218 script.js > export.csv
 # and copy it to your machine
 scp admin@colibris_prod:/home/admin/export.csv local-export-copy.csv
 
@@ -106,7 +129,7 @@ db.Element.find({ 'data.openhours_more_infos': null })
 
 db.GoGoLog.updateMany( { } , { $rename: { 'type': 'level' } } )
 
-db.Configuration.updateMany( { } , { $set: { 'defautTileLayer': DBRef("TileLayer", 7, "gogocarto_default") }})
+db.Configuration.updateMany( { } , { $set: { 'defautTileLayer': DBRef("TileLayer", 7, "projetdustage-5218") }})
 
 // Reset duplicates
 db.Element.updateMany({moderationState: 4}, {$set: {moderationState: 0, isDuplicateNode: false}, $unset: { potentialDuplicates: 1} })
@@ -135,9 +158,9 @@ return result;
 
 db.Element.find({'images': {$exists: true}}).forEach(function(e) {
   e.images.forEach(function(image) {
-      image.fileUrl = image.fileUrl.replace('gogocarto_default', 'presdecheznous');
-      image.filePath = image.filePath.replace('gogocarto_default', 'presdecheznous');
-      image.externalImageUrl = image.externalImageUrl.replace('gogocarto_default', 'presdecheznous');
+      image.fileUrl = image.fileUrl.replace('projetdustage-5218', 'presdecheznous');
+      image.filePath = image.filePath.replace('projetdustage-5218', 'presdecheznous');
+      image.externalImageUrl = image.externalImageUrl.replace('projetdustage-5218', 'presdecheznous');
   })
   db.Element.save(e);  
 });
@@ -151,3 +174,42 @@ db.Element.dropIndex('search_index')
 db.Element.createIndex( { name: "text", "data.description": "text" }, { name: "search_index", default_language: "french", weights: { name: 10, "data.description": 5 }, })
 
 db.Project.updateMany({}, {$currentDate: {nextUpdateAt: true}})
+
+
+// FIX doctrine_increment_ids for every database
+var documents = ["Category","Option","About","Partner","Wrapper","Element","TileLayer","Configuration","fos_user_group","UserInteractionContribution","UserInteractionVote","UserInteractionReport","Stamp","PartnerImage","Import","ConfImage","CodeInvitation","GoGoLog"];
+var mongo = db.getMongo(); // or mongo = new Mongo();
+var count = 0;
+mongo.getDBNames().forEach(function(dbname){
+    db = mongo.getDB(dbname);
+    print("Updating db " + db + "(" + count + ")" );
+    count = count + 1;
+    for(var i = 0; i < documents.length; i++) {
+        document = documents[i];
+        var sort = ["Element", "UserInteractionContribution","UserInteractionVote","UserInteractionReport"].includes(document) ? {createdAt: -1} : {_id: -1}
+        var last = db[document].find({}, {_id: 1}).sort(sort).limit(1)[0];
+        if (last) {
+            var new_id = last._id;
+            if (typeof new_id === 'string') {
+                total = 0;
+                for (var j = 0, len = new_id.length; j < len; j++) {
+                    var code = new_id.charCodeAt(j);
+                    var new_val;
+                    if (code <= 57) {
+                        new_val = (code - 48)
+                    } else if (code <= 90) {
+                        new_val = (code - 55);
+                    } else if (code <= 122) {
+                        new_val = (code - 61);
+                    }
+                    total += new_val*Math.pow(62, len - j - 1);
+                }
+                new_id = total;
+            }
+            db.doctrine_increment_ids.updateOne(
+                {_id: document },
+                {$set: {_id: document, current_id: new_id}},
+                {upsert: true});
+        }
+    }
+});

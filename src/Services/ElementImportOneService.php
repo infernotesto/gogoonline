@@ -9,7 +9,6 @@ use App\Document\ElementImage;
 use App\Document\ElementStatus;
 use App\Document\ModerationState;
 use App\Document\OpenHours;
-use App\Document\Option;
 use App\Document\OptionValue;
 use App\Document\PostalAddress;
 use Doctrine\ODM\MongoDB\DocumentManager;
@@ -32,7 +31,7 @@ class ElementImportOneService
                                 ElementPendingService $elementService)
     {
         $this->dm = $dm;
-        $this->geocoder = $geocoder->using('google_maps');
+        $this->geocoder = $geocoder->using('mapbox');
         $this->interactionService = $interactionService;
         $this->elementService = $elementService;
         $this->currentRow = [];
@@ -129,13 +128,15 @@ class ElementImportOneService
 
         $element->setOldId($row['id']);
         $element->setName($row['name']);
-        $address = new PostalAddress($row['streetAddress'], $row['addressLocality'], $row['postalCode'], $row['addressCountry'], $row['customFormatedAddress']);
-        $element->setAddress($address);
+        $oldFormatedAdress = $element->getFormatedAddress();
+        $newAddress = new PostalAddress($row['streetAddress'], $row['addressLocality'], $row['postalCode'], $row['addressCountry'], $row['customFormatedAddress']);
+        $element->setAddress($newAddress);
 
-        $sourceKey = $import ? $import->getSourceName() : 'Inconnu';
-        if (!$import->isDynamicImport() && (strlen($row['source']) > 0 && 'Inconnu' != $row['source'])) $sourceKey = $row['source'];
-        $element->setSourceKey($sourceKey);
         $element->setSource($import);
+        // Override sourceKey for standard import
+        if (!$import->isDynamicImport() && (strlen($row['source']) > 0 && 'Inconnu' != $row['source']))
+            $element->setSourceKey($row['source']);
+
 
         if (array_key_exists('owner', $row)) {
             $element->setUserOwnerEmail($row['owner']);
@@ -143,22 +144,32 @@ class ElementImportOneService
 
         $lat = $row['latitude'];
         $lng = $row['longitude'];
-        if (is_object($lat) || is_array($lat) || 0 == strlen($lat) || is_object($lng) || 0 == strlen($lng) || 'null' == $lat || null == $lat) {
-            $lat = 0;
-            $lng = 0;
-            if ($import->getGeocodeIfNecessary()) {
-                $result = $this->geocoder->geocode($address->getFormatedAddress())->first()->getCoordinates();
-                $lat = $result->getLatitude();
-                $lng = $result->getLongitude();
+        try {
+            if (is_object($lat) || is_array($lat) || 0 == strlen($lat) || is_object($lng) || 0 == strlen($lng) || 'null' == $lat || null == $lat) {
+                $lat = 0; $lng = 0;  
+                $newFormatedAddress = $newAddress->getFormatedAddress();   
+                // Geocode if necessary  
+                if ($newFormatedAddress == $oldFormatedAdress) {
+                    $lat = $element->getGeo()->getLatitude();
+                    $lng = $element->getGeo()->getLongitude();
+                } 
+                if ($lat == 0 && $lng == 0 && $import->getGeocodeIfNecessary() && $newFormatedAddress && strlen($newFormatedAddress) > 0) {
+                    $result = $this->geocoder->geocode($newFormatedAddress)->first()->getCoordinates();
+                    $lat = $result->getLatitude();
+                    $lng = $result->getLongitude();
+                }
             }
-        }
+        } catch (\Exception $e) {}
+        
         if (0 == $lat || 0 == $lng) {
             $element->setModerationState(ModerationState::GeolocError);
         }
+        
         $element->setGeo(new Coordinates($lat, $lng));
         $this->createImages($element, $row);
         $this->createFiles($element, $row);
         $this->createOpenHours($element, $row);
+        unset($row['osm_opening_hours']);
         $this->saveCustomFields($element, $row);
 
         if ($updateExisting) {
@@ -176,24 +187,20 @@ class ElementImportOneService
             } else {
                 if ($updateExisting) {
                     $element = $this->elementService->savePendingModification($element);
-                    $this->elementService->createPending($element, true, null);
+                    $this->elementService->createPending($element, true, null, true);
                 } else {
-                    $this->elementService->createPending($element, false, null);
+                    $this->elementService->createPending($element, false, null, true);
                 }
             }
         } else {
             if ($updateExisting) {
-                // create edit contribution
-                $this->interactionService->createContribution($element, null, 1, $element->getStatus());
+                // edit, do not create contribution
             } else {
                 // create import contribution if first time imported
-                $this->interactionService->createContribution($element, null, 0, $element->getStatus());
+                $this->interactionService->createContribution($element, null, 4, $element->getStatus(), null, null, true);
             }
         }
 
-        if ($import->isDynamicImport()) {
-            $element->setIsExternal(true);
-        }
         $element->updateTimestamp();
         $element->setPreventLinksUpdate(true); // Check the links between elements all at once at the end of the import
 
@@ -277,14 +284,22 @@ class ElementImportOneService
 
     private function createOpenHours($element, $row)
     {
-        if (!isset($row['openHours']) || !is_associative_array($row['openHours'])) {
-            return;
+        if(isset($row['osm_opening_hours'])) {
+            try {
+                $oh = new OpenHours();
+                $oh->buildFromOsm($row['osm_opening_hours']);
+                $element->setOpenHours($oh);                
+            }
+            catch(\Exception $e) {;}
         }
-        $element->setOpenHours(new OpenHours($row['openHours']));
+        else if(isset($row['openHours']) && is_associative_array($row['openHours'])) {
+            $element->setOpenHours(new OpenHours($row['openHours']));
+        }
     }
 
     private function createOptionValues($element, $row, $import)
     {
+        if (!$import->isHandlingCategories()) return;
         $element->resetOptionsValues();
         $optionsIdAdded = [];
         $defaultOption = ['index' => 0, 'description' => ''];

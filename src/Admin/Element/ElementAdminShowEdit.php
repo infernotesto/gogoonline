@@ -25,10 +25,12 @@ class ElementAdminShowEdit extends ElementAdminList
     protected function configureFormFields(FormMapper $formMapper)
     {
         $dm = GoGoHelper::getDmFromAdmin($this);
-        $this->config = $dm->get('Configuration')->findConfiguration();  
+        $this->config = $dm->get('Configuration')->findConfiguration();
         $categories = $dm->query('Option')->select('name')->getArray();
         $categoriesChoices = array_flip($categories);
-        
+        $elementProperties = $dm->get('Element')->findDataCustomProperties();
+        $elementProperties = array_values(array_diff($elementProperties, array_keys($this->getSubject()->getData())));
+
         $formMapper
           ->with('Informations générales', ['class' => 'col-md-6'])
             ->add('name', null, ['required' => true, 'label' => "Nom / Titre"])
@@ -37,14 +39,19 @@ class ElementAdminShowEdit extends ElementAdminList
               'multiple' => true,
               'choices' => $categoriesChoices,
               'label' => 'Catégories'], ['admin_code' => 'admin.option_hidden'])
-            ->add('data', null, ['label_attr' => ['style' => 'display:none;'], 'attr' => ['class' => 'gogo-element-data']])
+            ->add('data', null, [
+              'label_attr' => ['style' => 'display:none;'],
+              'attr' => [
+                'class' => 'gogo-element-data',
+                'data-props' => json_encode($elementProperties)
+              ]])
             ->add('userOwnerEmail', EmailType::class, ['required' => false, 'label' => "Email de l'utilisateur propriétaire de cette fiche"])
             ->add('email', EmailType::class, ['required' => false, 'label' => "Email de l'élément"])
             ->add('images', CollectionType::class, [
               'entry_type' => ElementImageType::class,
               'allow_add' => true,
               'label' => 'Images',
-              'allow_delete' => true,              
+              'allow_delete' => true,
               'required' => false
             ])
             ->add('files', CollectionType::class, [
@@ -65,7 +72,7 @@ class ElementAdminShowEdit extends ElementAdminList
     protected function configureShowFields(ShowMapper $show)
     {
         $needModeration = 0 != $this->subject->getModerationState();
-        
+
         $show
           ->with('Autre infos', ['class' => 'col-md-6 col-sm-12'])
             ->add('id')
@@ -75,7 +82,7 @@ class ElementAdminShowEdit extends ElementAdminList
             ->add('createdAt', 'datetime', ['format' => 'd/m/Y à H:i'])
             ->add('updatedAt', 'datetime', ['format' => 'd/m/Y à H:i'])
           ->end();
-        
+
         if ($this->subject->isPending()) {
           $show->with('En attente', ['class' => 'col-md-6'])
             ->add('currContribution', null, ['template' => 'admin/partials/show_one_contribution.html.twig'])->end();

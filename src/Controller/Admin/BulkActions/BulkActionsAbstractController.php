@@ -3,6 +3,7 @@
 namespace App\Controller\Admin\BulkActions;
 
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController as Controller;
+use App\Document\ElementStatus;
 
 class BulkActionsAbstractController extends Controller
 {
@@ -16,15 +17,17 @@ class BulkActionsAbstractController extends Controller
     {
         $isStillElementsToProceed = false;
 
-        $elementRepo = $dm->get('Element');
-        
         if (!$this->fromBeginning && $request->get('batchFromStep')) {
             $batchFromStep = $request->get('batchFromStep');
         } else {
             $batchFromStep = 0;
         }
 
-        $count = $elementRepo->findVisibles(true, false, null, $batchFromStep);
+        $qb = $dm->query('Element')
+            ->field('status')->gte(ElementStatus::PendingModification)
+            ->skip($batchFromStep);
+        $qb = $this->filterElements($qb);
+        $count = (clone $qb)->getCount();
         $elementsToProcceedCount = 0;
         if ($count > $this->batchSize) {
             $batchLastStep = $batchFromStep + $this->batchSize;
@@ -34,7 +37,7 @@ class BulkActionsAbstractController extends Controller
             $batchLastStep = $batchFromStep + $count;
         }
 
-        $elements = $elementRepo->findVisibles(false, false, $this->batchSize, $batchFromStep);
+        $elements = $qb->limit($this->batchSize)->getCursor(); 
 
         $i = 0;
         $renderedViews = [];
@@ -45,7 +48,7 @@ class BulkActionsAbstractController extends Controller
                     $renderedViews[] = $view;
                 }
             } catch (\Exception $e) {
-                $renderedViews[] = "Erreur en traitant l'élement {$element->getId()} : {$e->getMessage()}";
+                $renderedViews[] = "Erreur en traitant l'élement {$element->getId()} : {$e->getMessage()} FILE {$e->getFile()} LINE {$e->getLine()}";
             }
 
             if (0 == (++$i % 100)) {
@@ -76,6 +79,11 @@ class BulkActionsAbstractController extends Controller
             'elementsToProcceedCount' => $elementsToProcceedCount,
             'redirectionRoute' => $redirectionRoute,
             'title' => $this->title ? $this->title : $functionToExecute, ]);
+    }
+
+    protected function filterElements($qb)
+    {
+        return $qb;
     }
 
     protected function redirectToIndex()

@@ -1,3 +1,7 @@
+v3.2.7
+======
+* BREAKING CHANGE: the docker-composer.yml has been moved to the root of the project. If you have any docker-compose.local.yml, please move it also to the root
+
 v3.2.1
 ======
 * MAJOR: The way of managing SAAS instance cron jobs have changed. In your main database run `db.Project.updateMany({}, {$currentDate: {nextUpdateAt: true}})` and check `docs/installation.md` for new cron jobs configuration
@@ -5,7 +9,7 @@ v3.2.1
 v3.1.4
 ======
 * FEATURE: Ability to configure a custom domain in SASS mode (if the server uses nginx)
-* CONFIG: you need to add new entry in your .env.local : DATABASE_NAME=gogocarto_default 
+* CONFIG: you need to add new entry in your .env.local : DATABASE_NAME=projetdustage-5218
 
 v3.0.0
 ======

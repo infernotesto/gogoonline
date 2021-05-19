@@ -13,19 +13,22 @@ use App\Document\Element;
 use App\Document\TileLayer;
 use App\Document\Import;
 use App\Document\ImportDynamic;
+use App\Document\ModerationState;
 use App\Document\Option;
 use App\Document\Webhook;
 use App\Services\AsyncService;
-
+use App\Services\DocumentManagerFactory;
+use Sonata\DoctrineMongoDBAdminBundle\Model\ModelManager;
 /* check database integrity : for example when removing an option, need to remove all references to this options */
 class DatabaseIntegrityWatcher
 {
     protected $asyncService;
     protected $config;
 
-    public function __construct(AsyncService $asyncService)
+    public function __construct(AsyncService $asyncService, DocumentManagerFactory $dmFactory)
     {
         $this->asyncService = $asyncService;
+        $this->dmFactory = $dmFactory;
     }
 
     public function getConfig($dm)
@@ -34,6 +37,18 @@ class DatabaseIntegrityWatcher
             $this->config = $dm->get('Configuration')->findConfiguration();
         }
         return $this->config;
+    }
+
+    public function postPersist(\Doctrine\ODM\MongoDB\Event\LifecycleEventArgs $eventArgs): void
+    {
+        $document = $eventArgs->getDocument();
+        if ($document instanceof Webhook) {
+            $rootDm = $this->dmFactory->getRootManager();
+            $rootDm->query('Project')->updateOne()
+                ->field('domainName')->equals($this->dmFactory->getCurrentDbName())
+                ->field('haveWebhooks')->set(true)
+                ->execute();
+        }
     }
 
     // use post remove instead?
@@ -50,10 +65,6 @@ class DatabaseIntegrityWatcher
                     $user->removeGroup($group);
                 }
             }
-        } elseif ($document instanceof Import || $document instanceof ImportDynamic) {
-            $import = $document;
-            $qb = $dm->query('Element');
-            $qb->remove()->field('source')->references($import)->execute();
         } elseif ($document instanceof Webhook) {
             $webhook = $document;
             $contributions = $dm->query('UserInteractionContribution')
@@ -71,13 +82,17 @@ class DatabaseIntegrityWatcher
         } elseif ($document instanceof Element) {
             // remove dependance from nonDuplicates and potentialDuplicates
             $qb = $dm->query('Element');
-            $qb->addOr($qb->expr()->field('nonDuplicates.$id')->equals($document->getId()));
-            $qb->addOr($qb->expr()->field('potentialDuplicates.$id')->equals($document->getId()));
-            $dependantElements = $qb->execute();
+            $dependantElements = $qb
+                ->addOr($qb->expr()->field('nonDuplicates.$id')->equals($document->getId()))
+                ->addOr($qb->expr()->field('potentialDuplicates.$id')->equals($document->getId()))
+                ->execute();             
             foreach ($dependantElements as $element) {
                 $element->removeNonDuplicate($document);
                 $element->removePotentialDuplicate($document);
             }
+            foreach ($document->getPotentialDuplicates() as $element) {
+                $element->setModerationState(ModerationState::NotNeeded);
+            }                
 
             // remove depency for elements fields
             $elementsFields = [];
@@ -104,6 +119,14 @@ class DatabaseIntegrityWatcher
             if ($config->getDefaultTileLayer()->getId() == $document->getId()) {
                 $config->setDefaultTileLayer(null);
             }
+        }
+    }
+
+    public function postRemove(\Doctrine\ODM\MongoDB\Event\LifecycleEventArgs $args): void
+    {
+        $document = $args->getDocument();
+        if ($document instanceof Import || $document instanceof ImportDynamic) {
+            $this->asyncService->callCommand('app:import:remove', ['importId' => $document->getId()]);
         }
     }
 
@@ -140,6 +163,13 @@ class DatabaseIntegrityWatcher
                     $elementIdsString = '"'.implode(',', $elementIds).'"';
                     $this->asyncService->callCommand('app:elements:updateJson', ['ids' => $elementIdsString]);
                 }
+            }
+            if (array_key_exists('isSynchronized', $changeset)) {
+                $rootDm = $this->dmFactory->getRootManager();
+                $rootDm->query('Project')->updateOne()
+                    ->field('domainName')->equals($this->dmFactory->getCurrentDbName())
+                    ->field('haveWebhooks')->set($document->getIsSynchronized())
+                    ->execute();
             }
         }
     }

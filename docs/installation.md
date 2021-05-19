@@ -20,7 +20,7 @@ With the Docker installation, you have all the required softwares installed in t
 
 ### Local docker-compose
 
-If you have a specific environment, need for custom env vars, want to avoid exposing ports, etc, you can create a copy of `docker/docker-compose.yml` named `docker/docker-compose.local.yml` (it will be gitignored).
+If you have a specific environment, need for custom env vars, want to avoid exposing ports, etc, you can create a copy of `docker-compose.yml` named `docker-compose.local.yml` (it will be gitignored).
 
 
 Manual Install
@@ -34,7 +34,9 @@ Main requirements are :
 4. [MongoDB](http://php.net/manual/fr/mongodb.installation.php)
 5. Web Server (Apache, Nginx)
 
-Please refer to the dockerfile to know all dependencies : [DockerFile](../docker/server/Dockerfile)
+Please refer to the dockerfile to know all dependencies : [DockerFile](../docker/Dockerfile)
+
+You can also check [the Debian Buster Installation Guide](./installation_debian.md)
 
 ### Cloning Repository
 
@@ -103,7 +105,7 @@ Here are the following cron tab you need to configure
 
 @daily php GOGOCARTO_DIR/bin/console --env=prod app:projects:check-for-deleting
 # Next one is for custom domain, it works only with NGINX
-* * * * * cd GOGOCARTO_DIR && sh bin/execute_custom_domain.sh
+0 * * * * cd GOGOCARTO_DIR &&bash bin/execute_custom_domain.sh
 ```
 
 ### Updating GoGoCarto
@@ -111,6 +113,7 @@ Here are the following cron tab you need to configure
 Each time you want to update GoGoCarto, run:
 
 ```shell
+# With gogocarto user
 make gogo-update
 ```
 

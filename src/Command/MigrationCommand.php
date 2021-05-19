@@ -6,6 +6,7 @@ use App\Document\MigrationState;
 use App\Services\AsyncService;
 use Doctrine\ODM\MongoDB\DocumentManager;
 use App\Services\DocumentManagerFactory;
+use Symfony\Component\Console\Command\Command;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -15,7 +16,7 @@ use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInt
  * Command to update database when schema need migration
  * Also provide some update message in the admin dashboard.
  */
-class MigrationCommand extends GoGoAbstractCommand
+class MigrationCommand extends Command
 {
     // -----------------------------------------------------------------
     // DO NOT REMOVE A SINGLE ELEMENT OF THOSE ARRAYS, ONLY ADD NEW ONES
@@ -35,11 +36,9 @@ class MigrationCommand extends GoGoAbstractCommand
       // v3.2
       'db.Configuration.updateMany({}, {$set: {"user.loginWithLesCommuns": true, "user.loginWithLesGoogle": true, "user.loginWithFacebook": true}});',
       'db.Option.updateMany({}, {$set: {osmTags: {}}})',
-      'db.Element.find({}).forEach(function(e) {
-        for(var prop in e.privateData) { e.data[prop] = e.privateData[prop]; }
-        delete e.privateData;
-        db.Element.save(e);
-      });'
+      'var mapping = {}; 
+       db.Element.find({ privateData: { $exists: true, $ne: {} } }).forEach(function(doc){Object.keys(doc.privateData).forEach(function(key){mapping["privateData." + key]="data." + key})}); 
+       db.Element.updateMany({ privateData: { $exists: true, $ne: {} } }, {$rename: mapping})'
     ];
 
     public static $commands = [
@@ -50,6 +49,8 @@ class MigrationCommand extends GoGoAbstractCommand
       // v2.4.5
       'app:elements:updateJson all',
       // v3.2.0
+      'app:elements:updateJson all',
+      // v3.2.5
       'app:elements:updateJson all',
     ];
 
@@ -73,25 +74,36 @@ class MigrationCommand extends GoGoAbstractCommand
         "Nouveau moteur de recherche ! Sur la carte, lorsqu'on tape une recherche des suggestions apparaissent pour les éléments et les catégories (bientôt aussi pour les recherchent géographiques)",
         // v3.2
         "Vous pouvez maintenant configurer l'url de votre carte si vous possédez un nom de domaine (ou un sous domaine). Allez dans Personnalisation -> Configuration Générale et suivez les instructions !",
-        "La connexion via un compte tiers (Google, Facebook, LesCommuns.org) est maintenant possible ! Changez la configuration dans Utilisateurs -> Configuration"
+        "La connexion via un compte tiers (Google, Facebook, LesCommuns.org) est maintenant possible ! Changez la configuration dans Utilisateurs -> Configuration",
+        // 3.2.3
+        "Notifications : vous pouvez maintenant être alerté si un import a des problèmes (à configurer dans chaque Import) ou si des éléments sont à modérer (à configurer dans Utilisateurs)",
     ];
 
-    public function __construct(DocumentManagerFactory $dm, LoggerInterface $commandsLogger,
+    public function __construct(DocumentManagerFactory $dmFactory, LoggerInterface $commandsLogger,
                                TokenStorageInterface $security,
                                AsyncService $asyncService)
     {
         $this->asyncService = $asyncService;
-        parent::__construct($dm, $commandsLogger, $security);
+        $this->dm = $dmFactory->getRootManager();
+        $this->dmFactory = $dmFactory;
+        $this->logger = $commandsLogger;
+        $this->security = $security;
+        parent::__construct();
     }
 
-    protected function gogoConfigure(): void
+    protected $count = 1;
+    protected $current = 0;
+
+    protected function configure(): void
     {
         $this->setName('db:migrate')
              ->setDescription('Update datatabse each time after code update');
     }
 
-    protected function gogoExecute(DocumentManager $dm, InputInterface $input, OutputInterface $output): void
+    protected function execute(InputInterface $input, OutputInterface $output): void
     {
+        $dm = $this->dm;
+        $this->output = $output;
         $migrationState = $dm->query('MigrationState')->getQuery()->getSingleResult();
         if (null == $migrationState) { // Meaning the migration state was not yet in the place in the code
             $migrationState = new MigrationState();
@@ -103,17 +115,18 @@ class MigrationCommand extends GoGoAbstractCommand
             $dbs = [$_ENV['DATABASE_NAME']]; // default DB
             $dbNames = $dm->query('Project')->select('domainName')->getArray();
             foreach ($dbNames as $dbName) $dbs[] = $dbName;
-
+            $this->count = count($dbs);
             if (count(self::$migrations) > $migrationState->getMigrationIndex()) {
                 $migrationsToRun = array_slice(self::$migrations, $migrationState->getMigrationIndex());
                 $migrationsToRun = array_unique($migrationsToRun);
+                $this->current = 0;
                 foreach ($dbs as $db) {
                     foreach ($migrationsToRun as $migration) {
-                        $this->log('run migration '.$migration.' on project '.$db);
+                        $this->log('run migration '.$migration, $db);
                         $this->runMongoCommand($dm, $db, $migration);
+                        $this->current++;
                     }
                 }
-                $this->log(count($migrationsToRun).' migrations performed');
             } else {
                 $this->log('No Migrations to perform');
             }
@@ -123,11 +136,12 @@ class MigrationCommand extends GoGoAbstractCommand
             if (count(self::$commands) > $migrationState->getCommandsIndex()) {
                 $commandsToRun = array_slice(self::$commands, $migrationState->getCommandsIndex());
                 $commandsToRun = array_unique($commandsToRun);
-                $this->log(count($commandsToRun).' commands to run');
+                $this->current = 0;
                 foreach ($dbs as $db) {
                     foreach ($commandsToRun as $command) {
-                        $this->log('call command '.$command.' on project '.$db);
+                        $this->log('call command '.$command, $db);
                         $this->asyncService->callCommand($command, [], $db);
+                        $this->current++;
                     }
                 }
             } else {
@@ -136,15 +150,15 @@ class MigrationCommand extends GoGoAbstractCommand
 
             if (count(self::$messages) > $migrationState->getMessagesIndex()) {
                 $messagesToAdd = array_slice(self::$messages, $migrationState->getMessagesIndex());
-                $this->log(count($messagesToAdd).' messages to add');
+                $this->current = 0;
                 foreach ($dbs as $db) {
-                    $this->log('add message on project '.$db);
+                    $this->log(count($messagesToAdd).' messages to add', $db);
                     foreach ($messagesToAdd as $message) {
                         // create a GoGoLogUpdate
                         $this->asyncService->callCommand('gogolog:add:message', ['"'.$message.'"'], $db);
                     }
+                    $this->current++;
                 }
-                $this->log(count($messagesToAdd).' messages added to admin dashboard');
             } else {
                 $this->log('No Messages to add to dashboard');
             }
@@ -164,5 +178,19 @@ class MigrationCommand extends GoGoAbstractCommand
         $mongo = $dm->getConnection()->getMongoClient();
         $db = $mongo->selectDB($dbName);
         return $db->execute($command);
+    }
+
+    protected function log($message, $db = null)
+    {
+        if ($db) $message = "DB {$db} ($this->current/$this->count) : $message";
+        $this->logger->info($message);
+        $this->output->writeln($message);
+    }
+
+    protected function error($message, $db = null)
+    {
+        if ($db) $message = "DB {$this->db} ($this->current/$this->count) : $message";
+        $this->logger->error($message);
+        $this->output->writeln('ERROR '.$message);        
     }
 }

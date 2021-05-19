@@ -21,6 +21,7 @@ class GoGoAbstractCommand extends Command
     protected $logger;
     protected $security;
     protected $output;
+    protected $runOnlyOnRootDatabase = false;
 
     public function __construct(DocumentManagerFactory $dmFactory, LoggerInterface $commandsLogger,
                                TokenStorageInterface $tokenStorage)
@@ -44,23 +45,26 @@ class GoGoAbstractCommand extends Command
         try {
             $this->output = $output;
 
-             // create dummy user, as some code called from command will maybe need the current user informations
-             $token = new AnonymousToken('admin', 'GoGo Gadget au Bot', ['ROLE_ADMIN']);
-             $this->security->setToken($token);
+            // create dummy user, as some code called from command will maybe need the current user informations
+            $token = new AnonymousToken('admin', 'GoGo Gadget au Bot', ['ROLE_ADMIN']);
+            $this->security->setToken($token);
 
-            if ($input->getArgument('dbname')) {
+            if ($this->runOnlyOnRootDatabase) {
+                $this->dm = $this->dmFactory->getRootManager();
+                $this->gogoExecute($this->dm, $input, $output);
+            } else if ($input->getArgument('dbname')) {
                 $this->dm = $this->dmFactory->switchCurrManagerToUseDb($input->getArgument('dbname'));
                 $this->gogoExecute($this->dm, $input, $output);
-            } else if ($_ENV['USE_AS_SAAS']) {
+            } else if ($_ENV['USE_AS_SAAS'] === 'true') {
                 $qb = $this->dm->query('Project');
-                $this->filterProjects($qb);                        
+                $this->filterProjects($qb);
                 $dbs = $qb->select('domainName')->getArray();
-                $count = count($dbs);                
+                $count = count($dbs);
                 $this->log("---- Run {$this->getName()} for $count projects", false);
                 foreach($dbs as $dbName) {
                     $this->dm = $this->dmFactory->createForDB($dbName);;
                     $this->gogoExecute($this->dm, $input, $output);
-                }                
+                }
             } else {
                 $this->dm = $this->dmFactory->getRootManager();
                 $this->gogoExecute($this->dm, $input, $output);
@@ -98,7 +102,7 @@ class GoGoAbstractCommand extends Command
         $this->dm->persist($log);
         $message = "DB {$this->dm->getConfiguration()->getDefaultDB()} : $message";
         $this->logger->error($message);
-        $this->output->writeln('ERROR '.$message);        
+        $this->output->writeln('ERROR '.$message);
         $this->dm->flush();
     }
 }

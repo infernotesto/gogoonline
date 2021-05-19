@@ -10,6 +10,7 @@ use App\Document\Project;
 use App\Document\Taxonomy;
 use App\Services\DocumentManagerFactory;
 use App\Services\UrlService;
+use App\EventListener\ConfigurationListener;
 use Doctrine\ODM\MongoDB\DocumentManager;
 use FOS\UserBundle\Model\UserInterface;
 use FOS\UserBundle\Model\UserManagerInterface;
@@ -18,6 +19,9 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController as Controller;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Annotation\Route;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
+use Symfony\Component\Security\Core\Exception\AccountStatusException;
 
 class ProjectController extends Controller
 {
@@ -97,9 +101,6 @@ class ProjectController extends Controller
             $projectDm->persist($taxonomy);
             $projectDm->flush();
 
-            $projectDm->getSchemaManager()->updateIndexes();
-
-
             // REDIRECT to new project
             $url = $urlService->generateUrlFor($project, 'gogo_saas_initialize_project');
             return $this->redirect($url);
@@ -120,7 +121,6 @@ class ProjectController extends Controller
         }
         $dm = $dmFactory->getCurrentManager();
         $repository = $dm->get('Project');
-
         $config = $dm->get('Configuration')->findConfiguration();
 
         $projects = $dm->query('Project')
@@ -146,7 +146,8 @@ class ProjectController extends Controller
     // This route is to create an Admin User when the project is just created
     public function initializeAction(Request $request, DocumentManager $dm,
                                      UserManagerInterface $userManager,
-                                     LoginManagerInterface $loginManager)
+                                     LoginManagerInterface $loginManager,
+                                     ConfigurationListener $confService)
     {
         // Return if already existing users
         $users = $dm->get('User')->findAll();
@@ -156,7 +157,11 @@ class ProjectController extends Controller
 
         $config = $dm->get('Configuration')->findConfiguration();
 
-        // CRATE ADMIN USER
+        // Init indexes
+        $dm->getSchemaManager()->updateIndexes();
+        $confService->manuallyUpdateIndex($dm);
+
+        // CREATE ADMIN USER
         $user = $userManager->createUser();
 
         $form = $this->get('form.factory')->create(RegistrationFormType::class, $user);
@@ -194,10 +199,20 @@ class ProjectController extends Controller
     }
 
     // In SAAS Mode, a project is being deleted by the owner
-    public function deleteCurrProjectAction(DocumentManagerFactory $dmFactory, UrlService $urlService)
+    public function deleteCurrProjectAction(DocumentManagerFactory $dmFactory, UrlService $urlService,
+                                            LoggerInterface $projectsLogger, TokenStorageInterface $securityContext)
     {
+        $user = $securityContext->getToken()->getUser();
         $dm = $dmFactory->getCurrentManager();
         $dbName = $dmFactory->getCurrentDbName();
+
+        if (!$user || !$user->hasRole('ROLE_SUPER_ADMIN')) {
+            $username = $user ? 'Unknown User' : $user->getUsername();
+            $projectsLogger->error("The user $username have tried to delete $dbName but is not a super admin");
+        } else {
+            $projectsLogger->info("Project $dbName being deleted by {$user->getUsername()}");
+        }    
+
         $mongo = $dm->getConnection()->getMongoClient();
         $db = $mongo->selectDB($dbName);
         $db->command(['dropDatabase' => 1]);

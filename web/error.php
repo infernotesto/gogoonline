@@ -7,14 +7,13 @@
 <!--[if !(IE)]><!--> <html class="no-js" lang="fr"> <!--<![endif]-->
 <head>
   <title>Erreur</title>
-  <!-- TODO --><meta name="google-site-verification" content="" />  
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />   
  
   <link rel="stylesheet" href="web/css/gogocarto.css"">  
    <link rel="stylesheet" href="web/css/pages.css"> 
   <meta name="robots" content="index, follow, all" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>   
-  <link href="https://fonts.googleapis.com/css?family=Lobster|Roboto:400,700" rel="stylesheet"> 
+  <link href="https://fonts.googleapis.com/css?family=Nunito" rel="stylesheet"> 
 </head>
 
 <body>
@@ -46,6 +45,7 @@
     padding: 0;
     margin: 0;
     background-color: #354254;
+    font-family: Nunito;
   }
   #page-content {
     background-color: #f4f4f4;

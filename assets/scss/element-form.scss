@@ -6,6 +6,7 @@
 .gogo-load-css
 {
   @import "components/element-form/category-field";
+  @import "components/element-form/daterangepicker";
   @import 'vendor/select2-materialize';
 
   label { color: inherit; }
@@ -41,6 +42,12 @@
   .select-wrapper + label {
     color: inherit;
     font-weight: bold;
+  }
+  .select-wrapper .caret {
+    opacity: .6;
+  }
+  .select-input:not(.initialized) {
+    label { opacity: 0; }
   }
   .mandatory-asterisk:after {
     content: "*";
@@ -103,6 +110,7 @@
   }
 
   .character-counter { margin-top: -10px; }
+  .option-field-description .character-counter { margin-top: 0; }
   textarea ~ .character-counter { margin-top: -15px; }
 
   .invalid-required {
@@ -200,11 +208,6 @@
     padding-top: 2rem;
     margin-bottom: 5px !important;
     @media screen and (min-width: 600px) { margin-bottom: -10px !important; }
-  }
-
-  #input-website
-  {
-    margin-bottom: 2rem;
   }
 
   .logged-info
@@ -516,5 +519,9 @@
   .cke_dialog_body {
     max-width: 800px;
     margin: 0 auto;
+  }
+
+  .to-html:not(.initialized) {
+    visibility: hidden;
   }
 }

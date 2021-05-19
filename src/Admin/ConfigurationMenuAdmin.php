@@ -6,6 +6,7 @@ use Sonata\AdminBundle\Form\FormMapper;
 use Sonata\AdminBundle\Form\Type\AdminType;
 use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
 use Symfony\Component\Form\Extension\Core\Type\IntegerType;
+use Symfony\Component\Form\Extension\Core\Type\HiddenType;
 use App\Helper\GoGoHelper;
 
 class ConfigurationMenuAdmin extends ConfigurationAbstractAdmin
@@ -29,16 +30,16 @@ class ConfigurationMenuAdmin extends ConfigurationAbstractAdmin
             ->tab('Général')
                 ->with('Menu (contient les filtre et la barre de recherche)')
                     ->add('menu.width', IntegerType::class, ['label' => 'Largeur du menu', 'required' => false, 'attr' => ['placeholder' => '290']])
-                    ->add('menu.smallWidthStyle', CheckboxType::class, ['label' => 'Utiliser un style compréssé', 'label_attr' => ['title' => "Diminue un peu la taille de la police et les marges. Pratique lorsque le nom des catégories sont longues que l'on veut gagner en largeur"], 'required' => false])
+                    ->add('menu.smallWidthStyle', CheckboxType::class, ['label' => 'Utiliser un style compressé', 'label_attr' => ['title' => "Diminue un peu la taille de la police et les marges. Pratique lorsque le nom des catégories sont longues que l'on veut gagner en largeur"], 'required' => false])
                     ->add('menu.showOnePanePerMainOption', CheckboxType::class, ['label' => 'Afficher un sous menu pour chaque catégorie principale', 'required' => false])
                     ->add('menu.showCheckboxForMainFilterPane', CheckboxType::class, ['label' => 'Afficher les checkbox dans la panneau principal', 'required' => false])
                     ->add('menu.showCheckboxForSubFilterPane', CheckboxType::class, ['label' => 'Afficher les checkbox dans les sous panneaux',  'label_attr' => ['title' => 'Valable uniquement si "afficher un sous menu pour chaque catégorie principale" est coché'], 'required' => false])
                     ->add('menu.displayNumberOfElementForEachCategory', CheckboxType::class, ['label' => "Pour chaque catégorie, afficher le nombre d'élément ayant cette catégorie", 'required' => false])
                     ->add('menu.displayNumberOfElementRoundResults', CheckboxType::class, ['label' => 'Arrondir les résultat (afficher 300+ au lieu de 326)',  'label_attr' => ['title' => "Valable uniquement si \"afficher le nombre d'éléments par catégorie\" est coché"], 'required' => false])
                 ->end()
-                // ->with('Personnalisez les filtres dans le menu', ['description' => ""])
-                //     ->add('menu.filtersJson', HiddenType::class, ['attr' => ['class' => 'gogo-filters-builder', 'dataproperties' => $propertiesText]])
-                // ->end()
+                ->with('Personnalisez les filtres dans le menu', ['description' => ""])
+                    ->add('menu.filtersJson', HiddenType::class, ['attr' => ['class' => 'gogo-filters-builder', 'dataproperties' => $propertiesText]])
+                ->end()
             ->end()
             ->tab('Recherche')
                 ->with("Recherche d'un lieu", $featureStyle)

@@ -1,6 +1,17 @@
+$('.to-html:not(.initialized)').each(function() { $(this).html($(this).text()).addClass('initialized'); });
+
 jQuery(document).ready(function()
 {
-  $('select:not(.select2)').material_select();
+  function handleSelectInitialized($select) {
+    $select.closest('.input-field').addClass("initialized")
+    $select.closest('.input-field').find('.material-icons').addClass('active');
+  }
+  $('select:not(.select2)').each(function() {
+    if ($(this).val()) handleSelectInitialized($(this))
+  })
+  $('select:not(.select2)').on('change', function() {
+    handleSelectInitialized($(this))
+  }).material_select()
 
   $('select.select2').change(function() {
     // add relevant classes to prefix icon, to it's colored the same way than other fields
@@ -17,10 +28,11 @@ jQuery(document).ready(function()
   })
   $('select.select2').trigger('change');
   // add relevant classes to prefix icon, to it's colored the same way than other fields
-  $('.select2-search__field').focus(function() { $(this).closest('.input-field').find('.material-icons').addClass('active') })
+  $('input.select-dropdown, .select2-search__field').focus(function() { $(this).closest('.input-field').find('.material-icons').addClass('active') })
   $('.select2-search__field').blur(function() { $(this).closest('.input-field').find('.material-icons').removeClass('active') })
+  $('input.select-dropdown').blur(function() { if (!$(this).val()) $(this).closest('.input-field').find('.material-icons').removeClass('active') })
 
-  $('.to-html').each(function() { $(this).html($(this).text()); });
+  $('.to-html:not(.initialized)').each(function() { $(this).html($(this).text()).addClass('initialized'); });
 
   // TIMEPICKERS
   $('.timepicker').each(function(e) {

@@ -15,47 +15,68 @@ use App\Helper\GoGoHelper;
  */
 class ElementRepository extends DocumentRepository
 {
-    public function findDuplicatesFor($element)
+    protected $config = null;
+    
+    private function getConfig()
     {
-        // Duplicates search is used in two places :
-        // 1- When we create a new element, we check that it's not always existing
-        // 2- From the bulk action detect duplicates. It goes through all the database to find duplicates
-        // For newly created element the search is wider, because we look also on deleted element, and
-        // it's okay for the user to just say "no this is new element"
-        // For the bulk detection, we cannot make a wider query otherwise it could result in thousands of
-        // duplicates to proceed
+        if (!$this->config) $this->config = $this->getDocumentManager()->get('Configuration')->findConfiguration();
+        return $this->config;
+    }
+    
+    public function findDuplicatesFor($element, $elementIdsToIgnore = [], $sourceToDetectWith = [])
+    {
         $forNewlyCreatedElement = $element->getId() == null;
-        $forBulkDuplicateDetection = !$forNewlyCreatedElement;
 
+        $config = $this->getConfig()->getDuplicates();
         $qb = $this->query('Element');
 
         // GEO SPATIAL QUERY
+        $distance = $config->getRangeInMeters();
         if ($forNewlyCreatedElement) {
-            $distance = 1;
+            $distance = 2 * $distance; // wider for manual check
         } else {
-            $distance = 0.4;
             $city = strtolower($element->getAddress()->getAddressLocality());
             if (in_array($element->getAddress()->getDepartmentCode(), ['75', '92', '93', '94'])
                 || in_array($city, ['marseille', 'lyon', 'bordeaux', 'lille', 'montpellier', 'strasbourg', 'nantes', 'nice'])) {
-                $distance = 0.1;
+                $distance = $distance / 2; // narrow down in big cities
             }
         }
-        $radius = $distance / 110; // convert kilometre in degrees
+        $radius = $distance / 110000; // convert meters in degrees
         $qb->field('geo')->withinCenter((float) $element->getGeo()->getLatitude(), (float) $element->getGeo()->getLongitude(), $radius);
+        
+        $qb->field('status')->gt(ElementStatus::ModifiedPendingVersion);
+        // We only want to have pairs of duplicates, so restrict to non potential duplicates
+        $qb->field('moderationState')->notEqual(ModerationState::PotentialDuplicate);
 
-        // REDUCE SCOPE FOR BULK DETECTION
-        if ($forBulkDuplicateDetection) {
-            $qb->field('status')->gt(ElementStatus::PendingModification);
-            $qb->field('moderationState')->notEqual(ModerationState::PotentialDuplicate);
-            $qb->field('id')->notIn($element->getNonDuplicatesIds());
+        $qb->field('id')->notIn(array_merge([$element->getId()], $element->getNonDuplicatesIds(), $elementIdsToIgnore));
+        
+        if (count($sourceToDetectWith)) {
+            $qb->field('sourceKey')->in($sourceToDetectWith);
         }
-
-        // FILTER BY TEXT SEARCH
-        $this->queryText($qb, $element->getName());
-
-        $qb->limit(6);
-
-        return $qb->hydrate(false)->getArray();
+        
+        // Text Search
+        $result1 = [];
+        if ($config->getUseGlobalSearch()) {
+            $qbText = clone $qb;
+            $result1 = $this->queryText($qbText, $element->getName())
+                            ->hydrate(true)->execute()->toArray();
+        }
+        // Field Search
+        $result2 = [];
+        if (count($config->getFieldsToBeUsedForComparaison())) {
+            $subQueriesCount = 0;
+            foreach($config->getFieldsToBeUsedForComparaison() as $field) {
+                if ($element->getProperty($field)) {
+                    $subQueriesCount++;
+                    $qb->addOr($qb->expr()->field("data.$field")->equals($element->getProperty($field)));
+                    if ($field == 'email') {
+                        $qb->addOr($qb->expr()->field("$field")->equals($element->getProperty($field)));
+                    }
+                }                    
+            }
+            if ($subQueriesCount > 0) $result2 = $qb->hydrate(false)->getArray();
+        }
+        return $result1 + $result2; // + operator will make the array unique cause each key is an element id
     }
 
     public function findWhithinBoxes($bounds, $request, $getFullRepresentation, $isAdmin = false)
@@ -82,25 +103,6 @@ class ElementRepository extends DocumentRepository
 
         return $results;
     }
-
-    // When user want to proceed already detected duplicates by the bulk action
-    // We use the field "duplicate node" to find them
-    public function findDuplicatesNodes($limit = null, $getCount = null)
-    {
-        $qb = $this->query('Element');
-        $qb->field('isDuplicateNode')->equals(true);
-        if ($getCount) {
-            $qb->count();
-        } else {
-            $qb->field('lockUntil')->lte(time());
-            if ($limit) {
-                $qb->limit($limit);
-            }
-        }
-
-        return $qb->execute();
-    }
-
 
     public function findElementsWithText($text, $fullRepresentation = true, $isAdmin = false)
     {
@@ -145,7 +147,7 @@ class ElementRepository extends DocumentRepository
         if (null != $moderationState) {
             $qb->field('moderationState')->equals($moderationState);
         } else {
-            $qb->field('moderationState')->notIn([ModerationState::NotNeeded]);
+            $qb->field('moderationState')->notIn([ModerationState::NotNeeded, ModerationState::PotentialDuplicate]);
         }
         $qb->field('status')->gte(ElementStatus::PendingModification);
 
@@ -168,7 +170,7 @@ class ElementRepository extends DocumentRepository
         return $qb->execute();
     }
 
-    public function findVisibles($getCount = false, $excludeImported = false, $limit = null, $skip = null)
+    public function findVisibles($getCount = false, $excludeImported = false, $limit = null, $skip = null, $forSeo = false)
     {
         $qb = $this->query('Element');
 
@@ -185,8 +187,11 @@ class ElementRepository extends DocumentRepository
         if ($getCount) {
             $qb->count();
         }
-
-        return $qb->execute();
+        if ($forSeo) {
+            return $qb->select('id', 'updatedAt')->getArray();
+        } else {
+            return $qb->execute();
+        }        
     }
 
     public function findAllPublics($getFullRepresentation, $isAdmin, $request = null)
@@ -280,7 +285,7 @@ class ElementRepository extends DocumentRepository
         if ($config->getSearchExcludingWords()) {
             $text = $text.' --'.str_replace(',', ' --', $config->getSearchExcludingWords());
         }
-        return $qb->text($text)->sortMeta('score', 'textScore');
+        return $qb->text($text)->sortMeta('score', 'textScore')->limit(30);
     }
 
     private function filterVisibles($qb, $status = ElementStatus::PendingModification)
@@ -339,14 +344,6 @@ class ElementRepository extends DocumentRepository
             ->getIds();
     }
 
-    public function findPotentialDuplicateOwner($element)
-    {
-        $qb = $this->query('Element');
-        $qb->field('potentialDuplicates')->includesReferenceTo($element);
-
-        return $qb->execute();
-    }
-
     public function findOriginalElementOfModifiedPendingVersion($element)
     {
         $qb = $this->query('Element');
@@ -357,17 +354,29 @@ class ElementRepository extends DocumentRepository
 
     public function findDataCustomProperties()
     {
-        // Run this command manually cause objectToArray has not yet been imlpement in Doctrine MongoDB (01/2021)
-        $collection = $this->getDocumentManager()->getCollection('Element');
-        $result = $collection->aggregate([
-            ['$project' => ["arrayofkeyvalue" => ['$objectToArray' => '$data']]],
-            ['$unwind' => '$arrayofkeyvalue'],
-            ['$group' => [
-                "_id" => null,
-                "allkeys" => ['$addToSet' => '$arrayofkeyvalue.k']
-            ]]
-            ], ['cursor' => true]);
-        return $result['result'][0]['allkeys'] ?? [];
+        if ($_ENV['MONGO_VERSION'] == 4) {
+            // Run this command manually cause objectToArray has not yet been imlpement in Doctrine MongoDB (01/2021)
+            $collection = $this->getDocumentManager()->getCollection('Element');
+            $result = $collection->aggregate([
+                ['$project' => ["arrayofkeyvalue" => ['$objectToArray' => '$data']]],
+                ['$unwind' => '$arrayofkeyvalue'],
+                ['$group' => [
+                    "_id" => null,
+                    "allkeys" => ['$addToSet' => '$arrayofkeyvalue.k']
+                ]]
+                ], ['cursor' => true]);
+            return $result['result'][0]['allkeys'] ?? [];
+        } else {
+            $result =  $this->getDocumentManager()->getDB()->execute("
+                var props = [];
+                db.Element.find({}).forEach(function(e) {
+                    for(var prop in e.data) {
+                        if (props.indexOf(prop) == -1) props.push(prop);
+                    }
+                });
+                return props;");
+            return $result['retval'];  
+        }
     }
 
     public function findAllCustomProperties()

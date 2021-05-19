@@ -6,6 +6,7 @@ use App\Services\ValidationType;
 use App\Document\PostalAddress;
 use App\Document\Coordinates;
 use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 // Split this big controller into two classes
 class ElementAdminController extends ElementAdminBulkController
@@ -166,7 +167,13 @@ class ElementAdminController extends ElementAdminBulkController
 
     private function handlesGoGoForm($element, $request)
     {
-        $element->setCustomData($request->get('data'));
+        $newData = [];
+        if ($request->get('data'))
+            foreach($request->get('data') as $key => $value) {
+                // array data is displayed with json_encode, so we decode it when saving
+                $newData[slugify($key, false)] = json_decode($value) ?? $value;
+            }
+        $element->setCustomData($newData);
         $adr = $request->get('address');
         $address = new PostalAddress($adr['streetAddress'], $adr['addressLocality'], $adr['postalCode'], $adr['addressCountry'], $adr['customFormatedAddress']);
         $element->setAddress($address);
@@ -219,11 +226,13 @@ class ElementAdminController extends ElementAdminBulkController
                 $this->admin->setSubject($submittedObject);
                 $this->admin->checkAccess('create', $submittedObject);
                 $this->handlesGoGoForm($submittedObject, $request);
-                $this->elementActionService->add($submittedObject, true, "");
                 
                 try {
                     $newObject = $this->admin->create($submittedObject);
-
+                    // send mail after element has been persisted (we need it's ID to generate the url)
+                    $this->elementActionService->add($newObject, true, "");
+                    $this->admin->update($newObject); // status has been modified by the elementActionService
+                    
                     if ($this->isXmlHttpRequest()) {
                         return $this->handleXmlHttpRequestSuccessResponse($request, $newObject);
                     }

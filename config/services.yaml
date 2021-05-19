@@ -44,7 +44,7 @@ services:
       arguments:
         $baseUrl: '%base_url%'
         $baseProtocol: '%base_protocol%'        
-        $useAsSaas: '%use_as_sass%'
+        $useAsSaas: '%use_as_saas%'
 
     App\Services\MailService:
       arguments:        
@@ -110,7 +110,9 @@ services:
 
     App\EventListener\DatabaseIntegrityWatcher:
       tags:
+          - { name: doctrine_mongodb.odm.event_listener, event: postPersist }
           - { name: doctrine_mongodb.odm.event_listener, event: preRemove }
+          - { name: doctrine_mongodb.odm.event_listener, event: postRemove }
           - { name: doctrine_mongodb.odm.event_listener, event: preFlush }
           - { name: doctrine_mongodb.odm.event_listener, event: preUpdate }
 
@@ -231,6 +233,12 @@ services:
         arguments: [~, App\Document\Configuration, 'App\Controller\Admin\ConfigurationAdminController']
         tags:
             - { name: sonata.admin, manager_type: doctrine_mongodb, group: custom, label: App Mobile }
+    
+    admin.custom_js_css_config:
+        class: App\Admin\ConfigurationCustomJsCssAdmin
+        arguments: [~, App\Document\Configuration, 'App\Controller\Admin\ConfigurationAdminController']
+        tags:
+            - { name: sonata.admin, manager_type: doctrine_mongodb, group: custom, label: Custom Css / Js }
 
     admin.email_config:
         class: App\Admin\ConfigurationMailAdmin
@@ -273,6 +281,12 @@ services:
         arguments: [~, App\Document\Stamp, '' ]
         tags:
             - { name: sonata.admin, manager_type: doctrine_mongodb, group: other_config, label: Etiquettes }
+
+    admin.key_config:
+        class: App\Admin\KeyAdmin
+        arguments: [~, App\Document\CodeInvitation, '' ]
+        tags:
+            - { name: sonata.admin, manager_type: doctrine_mongodb, group: other_config, label: Clés d'activations }
 
     admin.webhooks_config:
         class: App\Admin\WebhookAdmin
@@ -344,6 +358,12 @@ services:
         arguments: [~, App\Document\Option, 'App\Controller\Admin\OptionAdminController']
         tags:
             - { name: sonata.admin, manager_type: doctrine_mongodb, group: "Hide" }
+
+    admin.duplicates_config:
+        class: App\Admin\ConfigurationDuplicatesAdmin
+        arguments: [~, App\Document\Configuration, 'App\Controller\Admin\ConfigurationAdminController']
+        tags:
+            - { name: sonata.admin, manager_type: doctrine_mongodb, group: data, label: Gestion des Doublons }
 
     # ------- SAAS ---------
 

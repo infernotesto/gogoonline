@@ -177,7 +177,6 @@ class ElementAdminBulkController extends Controller
                 $this->dm->clear();
             }
         } catch (\Exception $e) {
-            dump($e);
             $this->addFlash('sonata_flash_error', 'Une erreur est survenue :'.$e->getMessage());
 
             return new RedirectResponse($this->admin->generateUrl('list', ['filter' => $this->admin->getFilterParameters()]));
@@ -209,7 +208,9 @@ class ElementAdminBulkController extends Controller
             ->getArray();
         $elementsIdsGroupedBySource = [];
         foreach($elements as $element) {
-            $elementsIdsGroupedBySource[$element['source']['$id']][] = $element['oldId'];
+            if (isset($element['source'])) {
+                $elementsIdsGroupedBySource[$element['source']['$id']][] = $element['oldId'];
+            }
         }
         foreach ($elementsIdsGroupedBySource as $sourceId => $elementIds) {
             $qb = $this->dm->query('Import');
@@ -235,9 +236,6 @@ class ElementAdminBulkController extends Controller
                 $this->trans('flash_batch_delete_error', [], 'SonataAdminBundle')
             );
         }
-        // $selectedModelQuery->findAndRemove()->execute();
-
-        $this->dm->createQueryBuilder(UserInteractionContribution::class)->field('element.id')->in($elementIds)->remove()->execute();
 
         $this->dm->flush();
 

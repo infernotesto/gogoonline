@@ -66,7 +66,7 @@ class APIController extends GoGoController
                 "data":' . $elementsJson;
 
             if (!$fullRepresentation) {
-                $mapping = ['id', $config->getCompactFields(), 'latitude', 'longitude', 'status', 'moderationState'];
+                $mapping = ['id', array_keys($config->getCompactFields()), 'latitude', 'longitude', 'status', 'moderationState'];
                 $elementsJson .= ', "mapping":'.json_encode($mapping);
             }
 
@@ -207,13 +207,13 @@ class APIController extends GoGoController
     public function getGoGoCartoJsConfigurationAction(DocumentManager $dm, GoGoCartoJsService $gogoJsService)
     {
         $config = $dm->get('Configuration')->findConfiguration();
-
+        $gogoJsService->setUrlType(UrlGeneratorInterface::ABSOLUTE_URL);
         $gogocartoConf = $gogoJsService->getConfig();
 
         return $this->createResponse(json_encode($gogocartoConf), $config);
     }
 
-    public function apiUiAction(SessionInterface $session, DocumentManager $dm)
+    public function apiUiAction(DocumentManager $dm)
     {
         $config = $dm->get('Configuration')->findConfiguration();
         $options = $dm->get('Option')->findAll();
@@ -224,6 +224,8 @@ class APIController extends GoGoController
     public function getManifestAction(Request $request, DocumentManager $dm)
     {
         $config = $dm->get('Configuration')->findConfiguration();
+        if (!$config) return new Response(json_encode(['error' => "No configuration found"]));
+        
         $img = $config->getFavicon() ? $config->getFavicon() : $config->getLogo();
         $imageData = null;
 
@@ -254,10 +256,12 @@ class APIController extends GoGoController
             $icon['sizes'] = $imageData->height().'x'.$imageData->width();
             $icon['mime'] = $imageData->mime();
         }
-        $shortName = $config->getAppNameShort() && strlen($config->getAppNameShort()) > 0 ? $config->getAppNameShort() : $config->getAppName();
+        $shortName = $config->getAppNameShort() && strlen($config->getAppNameShort()) > 0 ? 
+                     mb_substr($config->getAppNameShort(), 0, 12) : 
+                     mb_substr($config->getAppName(), 0, 11) . '.';
         $responseArray = [
           'name' => $config->getAppName(),
-          'short_name' => str_split($shortName, 12)[0],
+          'short_name' => $shortName,
           'lang' => 'fr',
           'start_url' => $this->generateUrl('gogo_app_shell') . '#/carte/autour-de-moi',
           'display' => 'standalone',
@@ -326,9 +330,9 @@ class APIController extends GoGoController
     {
         $qb = $dm->query('GoGoLog');
         $qb->updateMany()
-       ->field('type')->notEqual('update')
-       ->field('hidden')->equals(false)
-       ->field('hidden')->set(true)->execute();
+            ->field('type')->notEqual('update')
+            ->field('hidden')->equals(false)
+            ->field('hidden')->set(true)->execute();
 
         return $this->redirectToRoute('sonata_admin_dashboard');
     }
@@ -337,9 +341,9 @@ class APIController extends GoGoController
     {
         $qb = $dm->query('GoGoLogUpdate');
         $qb->updateMany()
-       ->field('type')->equals('update')
-       ->field('hidden')->equals(false)
-       ->field('hidden')->set(true)->execute();
+            ->field('type')->equals('update')
+            ->field('hidden')->equals(false)
+            ->field('hidden')->set(true)->execute();
 
         return $this->redirectToRoute('sonata_admin_dashboard');
     }

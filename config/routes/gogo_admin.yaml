@@ -10,6 +10,15 @@ gogo_core_help:
     path: /help
     defaults: { _controller: App\Controller\CoreController::helpAction }
 
+# KEY ACTIONS
+gogo_core_key:
+    path: /admin/key
+    defaults: { _controller: App\Controller\Admin\KeyController::indexAction }
+
+gogo_key_generate:
+    path: /admin/key/generate
+    defaults: { _controller: App\Controller\Admin\KeyController::generateAction }
+
 # BULK ACTIONS
 gogo_bulk_actions_index:
     path: /admin/bulkActions/index
@@ -25,16 +34,22 @@ gogo_bulk_actions_update_gamification:
 
 gogo_bulk_actions_detect_duplicates:
     path: /admin/bulkActions/detectDuplicates
-    defaults: { _controller: App\Controller\Admin\BulkActions\DuplicatesActionsController::detectDuplicatesAction }
+    defaults: { _controller: App\Controller\Admin\BulkActions\DuplicatesDetectionController::detectDuplicatesAction }
 
 # DUPLICATES
 gogo_duplicates_index:
     path: /duplicates
-    defaults: { _controller: App\Controller\DuplicatesController::indexAction }
+    defaults: { _controller: App\Controller\DuplicatesManagementController::indexAction }
 
+gogo_merge_element:
+    path: /duplicates/merge
+    defaults: { _controller: App\Controller\DuplicatesManagementController::mergeDuplicateAction }
+    requirements:
+        methods: POST
+        
 gogo_mark_as_non_duplicate:
     path: /duplicates/mark-as-non-duplicate
-    defaults: { _controller: App\Controller\DuplicatesController::markAsNonDuplicateAction }
+    defaults: { _controller: App\Controller\DuplicatesManagementController::markAsNonDuplicateAction }
     requirements:
         methods: POST
 

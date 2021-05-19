@@ -5,9 +5,9 @@ namespace App\EventListener;
 use App\Document\Configuration\ConfigurationApi;
 use App\Document\Configuration;
 use App\Document\Configuration\ConfigurationMarker;
+use App\Document\Configuration\ConfigurationMenu;
 use App\Services\AsyncService;
 use Symfony\Component\Filesystem\Filesystem;
-use App\Helper\GoGoHelper;
 
 class ConfigurationListener
 {
@@ -26,16 +26,12 @@ class ConfigurationListener
         $document = $args->getDocument();
         $dm = $args->getDocumentManager();
         $changeset = $dm->getChangeSet($document);
+
         // Update Json representation to fit the private property config
-        if ($document instanceof ConfigurationApi) {            
-            if (array_key_exists('publicApiPrivateProperties', $changeset)) {
-                $this->asyncService->callCommand('app:elements:updateJson', ['ids' => 'all']);
-            }
-        }
-        if ($document instanceof ConfigurationMarker) {
-            if (array_key_exists('fieldsUsedByTemplate', $changeset)) {
-                $this->asyncService->callCommand('app:elements:updateJson', ['ids' => 'all']);
-            }
+        if (  $document instanceof ConfigurationApi    && array_key_exists('publicApiPrivateProperties', $changeset)
+           || $document instanceof ConfigurationMarker && array_key_exists('fieldsUsedByTemplate', $changeset)
+           || $document instanceof ConfigurationMenu   && array_key_exists('filtersJson', $changeset)) {            
+            $this->asyncService->callCommand('app:elements:updateJson', ['ids' => 'all']);
         }
 
         if ($document instanceof Configuration) {
@@ -64,22 +60,33 @@ class ConfigurationListener
         }
     }
 
+    public function manuallyUpdateIndex($dm)
+    {
+        $formFields = $dm->get('Configuration')->findConfiguration()->getElementFormFieldsJson();
+        $this->commitIndex($dm, $this->calculateSearchIndexConfig($formFields));
+    }
+
     private function updateSearchIndex($dm, $oldFormFields, $newFormFields) {
         if ($oldFormFields == null || $newFormFields == null) return;
         $oldSearchIndex = $this->calculateSearchIndexConfig($oldFormFields);
         $newSearchIndex = $this->calculateSearchIndexConfig($newFormFields);
 
         if ($oldSearchIndex != $newSearchIndex) {
-            $db = $dm->getDB();
-            $db->command(["deleteIndexes" => 'Element',"index" => "name_text"]);
-            $db->command(["deleteIndexes" => 'Element',"index" => "search_index"]);
-            $db->selectCollection('Element')->createIndex($newSearchIndex["fields"], [
-                'name' => "search_index", 
-                "default_language" => "french", 
-                "weights" => $newSearchIndex["weights"]
-            ]);
+            $this->commitIndex($dm, $newSearchIndex);
             return ;
         }
+    }
+
+    private function commitIndex($dm, $indexConf)
+    {
+        $db = $dm->getDB();
+        $db->command(["deleteIndexes" => 'Element',"index" => "name_text"]);
+        $db->command(["deleteIndexes" => 'Element',"index" => "search_index"]);
+        $db->selectCollection('Element')->createIndex($indexConf["fields"], [
+            'name' => "search_index", 
+            "default_language" => "french", 
+            "weights" => $indexConf["weights"]
+        ]);
     }
 
     private function calculateSearchIndexConfig($formFieldsJson) {

@@ -8,9 +8,9 @@ use Symfony\Component\HttpFoundation\Request;
 
 class DirectoryController extends GoGoController
 {
-    public function renderAction(Request $request, GoGoCartoJsService $gogoJsService)
+    public function renderAction(Request $request, GoGoCartoJsService $gogoJsService, $elementId = null)
     {
-        $gogoConfig = $gogoJsService->getConfig();
+        $gogoConfig = $gogoJsService->getConfig($elementId);
 
         return $this->render('directory/directory.html.twig', ['gogoConfig' => $gogoConfig]);
     }
@@ -18,9 +18,9 @@ class DirectoryController extends GoGoController
     public function appShell(Request $request, DocumentManager $dm)
     {
         $config = $dm->get('Configuration')->findConfiguration();
-
+        
         $params = ['gogoConfigUrl' => $this->generateUrl('gogo_api_gogocartojs_configuration')];
-        if( $config->getHideHeaderInPwa() ) $params['hideHeader'] = true;
+        $params['hideHeader'] = $config ? $config->getHideHeaderInPwa() : false;
 
         return $this->render('directory/directory.html.twig', $params);
     }

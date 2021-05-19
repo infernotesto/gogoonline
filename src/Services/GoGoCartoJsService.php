@@ -6,19 +6,32 @@ use Doctrine\ODM\MongoDB\DocumentManager;
 use Symfony\Component\HttpFoundation\Session\SessionInterface;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
+use Symfony\Component\Routing\RouterInterface;
 
 class GoGoCartoJsService
 {
     public function __construct(DocumentManager $dm, TokenStorageInterface $securityContext, 
-                                UrlService $urlService, SessionInterface $session)
+                                RouterInterface $router, SessionInterface $session)
     {
         $this->dm = $dm;
         $this->securityContext = $securityContext;
-        $this->urlService = $urlService;
+        $this->router = $router;
         $this->session = $session;
+        $this->urlType = UrlGeneratorInterface::ABSOLUTE_PATH;
     }
 
-    public function getConfig()
+    public function setUrlType($type) {
+        $this->urlType = $type;
+        return $this;
+    }
+
+    /**
+     * Undocumented function
+     *
+     * @param string $elementId Include this element in the config so it's loaded directly
+     * @return void
+     */
+    public function getConfig($elementId = null)
     {
         $taxonomyRep = $this->dm->get('Taxonomy');
         $elementsRep = $this->dm->get('Element');
@@ -28,7 +41,8 @@ class GoGoCartoJsService
         $taxonomyJson = $taxonomyRep->findTaxonomyJson();
 
         $config = $this->dm->get('Configuration')->findConfiguration();
-
+        if (!$config) return [];
+        
         $user = $this->securityContext->getToken() ? $this->securityContext->getToken()->getUser() : null;
 
         $roles = is_object($user) ? $user->getRoles() : [];
@@ -185,10 +199,15 @@ class GoGoCartoJsService
             ],
             'data' => [
                 'taxonomy' => json_decode($taxonomyJson),
-                'elements' => $this->getAbsolutePath('gogo_api_elements_index'),
+                'elementsApiUrl' => $this->getAbsolutePath('gogo_api_elements_index'),
                 'requestByBounds' => true,
             ],
         ];
+
+        if ($elementId) {
+            $elementJson = $this->dm->get('Element')->find($elementId)->getJson();
+            $result['data']['elements'] = [json_decode($elementJson)];
+        }
 
         if ('transiscope' == $config->getTheme()) {
             $result['images'] = [
@@ -227,6 +246,6 @@ class GoGoCartoJsService
 
     private function getAbsolutePath($route, $params = [])
     {
-        return $this->urlService->generateUrl($route, $params);
+        return $this->router->generate($route, $params, $this->urlType);
     }
 }

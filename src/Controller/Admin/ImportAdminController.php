@@ -100,6 +100,12 @@ class ImportAdminController extends Controller
         if (!$object) {
             throw $this->createNotFoundException(sprintf('unable to find the object with id : %s', $id));
         }
+        $dm = $this->container->get('doctrine_mongodb')->getManager();
+        $config = $dm->get('Configuration')->findConfiguration();
+        if ($config->getDuplicates()->getDetectAfterImport() && 
+            $config->getDuplicates()->getAutomaticMergeIfPerfectMatch())
+            $object->warnUserThatDuplicatesWillBeDetectedAndAutoMerged = true;
+
         $this->admin->checkAccess('edit', $object);
         $this->admin->setSubject($object);
 
@@ -118,13 +124,13 @@ class ImportAdminController extends Controller
 
             // persist if the form was valid and if in preview mode the preview was approved
             if ($isFormValid) {
-                try {
-                    $dm = $this->container->get('doctrine_mongodb')->getManager();
+                try {                    
+                    $object->setSourceType($request->get('sourceType'));
                     
-                    // Fix ontology mapping for elements fields with reverse value
                     $ontology = $request->get('ontology');
-                    if ($ontology) {                        
-                        $config = $dm->get('Configuration')->findConfiguration();
+                    // Fix ontology mapping for elements fields with reverse value      
+                    if ($ontology) {                                         
+                        
                         foreach($config->getElementFormFields() as $field) {
                             if ($field->type === 'elements'
                                && in_array($field->name, array_values($ontology))
@@ -135,7 +141,7 @@ class ImportAdminController extends Controller
                                 $ontology[$key] = '/';
                             }
                         }
-                    }
+                    }                    
                     $object->setOntologyMapping($ontology);
                     $currentTaxonomyMapping = $object->getTaxonomyMapping();
 
@@ -162,6 +168,7 @@ class ImportAdminController extends Controller
                                         if (!$parent) {
                                             $parent = new Category();
                                             $parent->setCustomId($fieldName);
+                                            $parent->setPickingOptionText("une catégorie");
                                             $parent->setName($fieldName);
                                             $createdParent[$fieldName] = $parent;
                                         }
@@ -210,6 +217,10 @@ class ImportAdminController extends Controller
                     // auto collect data if the import config have changed
                     if ($request->get('import')) {
                         $url = $this->admin->generateUrl('refresh', ['id' => $object->getId()]);
+                    } elseif ($request->get('clear-elements')) {
+                        $url = $this->admin->generateUrl('edit', ['id' => $object->getId()]);
+                        $dm->query('Element')->field('source')->references($object)->batchRemove();
+                        $this->addFlash('sonata_flash_success', "Les éléments liés à cet import ont été effacés");
                     } elseif ($request->get('collect') || $oldUpdatedAt != $object->getMainConfigUpdatedAt()) {
                         $url = $this->admin->generateUrl('collect', ['id' => $object->getId()]);
                     } else {
@@ -220,7 +231,6 @@ class ImportAdminController extends Controller
                             'SonataAdminBundle' )
                         );
                     }
-
                     return $this->redirect($url);
                 } catch (\Sonata\AdminBundle\Exception\ModelManagerException $e) {
                     $this->handleModelManagerException($e);
@@ -284,6 +294,7 @@ class ImportAdminController extends Controller
             // persist if the form was valid and if in preview mode the preview was approved
             if ($isFormValid && (!$this->isInPreviewMode($request) || $this->isPreviewApproved($request))) {
                 try {
+                    $object->setSourceType($request->get('sourceType')); // CUSTOM                   
                     $object = $this->admin->create($object);
                     // CUSTOM
                     $url = $this->admin->generateUrl('collect', ['id' => $object->getId()]);

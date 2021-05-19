@@ -7,6 +7,7 @@ use Doctrine\ODM\MongoDB\DocumentManager;
 class ElementImportMappingService
 {
     protected $dm;
+    protected $config;
 
     public function __construct(DocumentManager $dm, 
                                 ElementImportMappingOntologyService $ontologyService,
@@ -18,10 +19,20 @@ class ElementImportMappingService
         $this->mappingTableIds = [];
     }
 
+    private function getConfig()
+    {
+        if (!$this->config) $this->config = $this->dm->get('Configuration')->findConfiguration();
+        return $this->config;
+    }
+
     public function transform($data, $import)
     {
         // Execute custom code (the <?php is used to have proper code highliting in text editor, we remove it before executing)
-        eval(str_replace('<?php', '', $import->getCustomCode()));
+        try {
+            eval(str_replace('<?php', '', $import->getCustomCode()));
+        } catch (\Exception $e) {
+            return null;
+        }
         if (null == $data || !is_array($data)) {
             return [];
         }
@@ -87,6 +98,7 @@ class ElementImportMappingService
                     unset($data[$key]['changeset']); 
                     unset($data[$key]['uid']); 
                     unset($data[$key]['user']); 
+                    $data[$key]['osmUrl'] = $this->getConfig()->getOsm()->getFormattedOsmHost() . "{$row['type']}/{$row['id']}";
                 }
             } else {
                 // the $row is not an array, probably a string so we ignore it
@@ -97,7 +109,7 @@ class ElementImportMappingService
         // Ontology
         $this->ontologyService->collectOntology($data, $import);
         $data = $this->ontologyService->mapOntology($data, $import);
-
+        
         if (null == $data || !is_array($data)) {
             return [];
         }

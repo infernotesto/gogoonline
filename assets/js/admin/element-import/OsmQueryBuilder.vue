@@ -14,7 +14,7 @@
                 <i class="fa fa-trash"></i>
             </button>
             <div v-for="(condition, conditionIndex) in query" class="condition-container" :key="conditionIndex">
-                <osm-condition :condition="condition" :key="'Query' + queryIndex + 'Condition' + 'Key' + condition.key"></osm-condition>
+                <osm-condition :condition="condition" :key="'Query' + queryIndex"></osm-condition>
                 <button type="button" @click="query.splice(conditionIndex,1)" class="btn btn-default btn-icon remove-condition">
                     <i class="fa fa-trash remove-condition"></i>
                 </button>
@@ -64,7 +64,7 @@ export default {
         },
         overpassApiUrl() {
             // out meta provide extra data, out center provide center of way or relation
-            return `https://overpass-api.de/api/interpreter?data=[out:json][timeout:200];(${this.overpassQuery});out%20meta%20center;`
+            return `https://overpass-api.de/api/interpreter?data=[out:json][timeout:1000];(${this.overpassQuery});out%20meta%20center;`
         }
     },
     watch: {
@@ -88,6 +88,7 @@ export default {
     .condition-container {
         display: flex;
         align-items: center;
+        .btn-icon { padding: 4px 10px;}
     }
     .condition {
         display: flex;

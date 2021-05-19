@@ -15,28 +15,26 @@
 {# BODY CONTENT #}
 {% block body_content %}
   <section>
+    
+    <center style="margin-bottom: 2rem"><a href="{{ path('gogo_core_bundle_config_duplicates_admin_classname_list')}}"><button class="btn btn-secondary">Retour à la gestion des doublons</button></a></center>
 
     {% if duplicatesNode|length == 0 %}
       <h1>Aucun doublon à traiter !</h1>
       {% if leftDuplicatesToProceedCount > 0 %}
-        <center><p>Les doublons restant sont déjà en traitement par quelqu'un d'autre ({{ leftDuplicatesToProceedCount }})</p>  </center>
+        <center><p>{{ leftDuplicatesToProceedCount }} doublons sont en fait encore à traiter, mais ont été bloqués par un autre utilisateur. Attendez 10 minutes pour qu'ils se débloquent</p>  </center>
       {% endif %}
     {% else %}
-      <h1>Gérez les doublons détectés</h1>
+      <h1>Fusionnez les doublons</h1>
 
-      <div class="explanations">
-        <p>Chaque groupe présente des éléments détectés comme doublons. Vous pouvez cliquer sur le nom d'un élément pour afficher plus de détail</p>
-
-        <p>Si les éléments présentés ne sont pas des doublons, cliquez sur la croix. Si il y a des doublons, choisissez qui conserver et qui supprimer.</p>
-
-        <p>Plus d'info sur la gestion des doublons : les éléments sont déjà triés dans chaque groupe, normallement le premier élément devrait être celui à conserver. Si vous avez besoin de faire des modifications, cliquez sur l'icon crayon. Lorsque vous traitez les éléments un par un avec les bouton conserver/supprimer, veillez à bien marquer chaque élément du groupe avec l'un ou l'autre de ces boutons</p>
-
-      </div>
       {% for duplicateNode in duplicatesNode %}
-        {% include 'duplicates/duplicate-node.html.twig' with { 'duplicateNode' : duplicateNode, 'optionsNames' : optionsNames } %}
+        {% include 'duplicates/duplicate-node.html.twig' with { 'duplicateNode' : duplicateNode, 'config' : config } %}
       {% endfor %}
 
-      <center><button class="btn btn-primary" onclick="window.location.reload()">J'en veux encore ! (plus que {{ leftDuplicatesToProceedCount }} doublons à traiter)</button></center>
+      {% if leftDuplicatesToProceedCount > 0 %}
+        <center>        
+          <button class="btn btn-primary" onclick="window.location.reload()">J'en veux encore ! (plus que {{ leftDuplicatesToProceedCount }} doublons à traiter)</button>
+        </center>
+      {% endif %}
     {% endif %}
 
   </section>
@@ -44,10 +42,9 @@
 {% endblock %}
 
 {% block page_javascripts %}
-  <script src="{{ asset('js/external-pages.js') }}"></script>
+  <script src="{{ asset('js/external-pages.js?ver=' ~ version) }}"></script>
   <script>
-    var apiDelete = "{{ path('gogo_delete_element') }}";
-    var apiResolve = "{{ path('gogo_resolve_reports_element') }}";
+    var apiMerge = "{{ path('gogo_merge_element') }}";
     var apiMarkAsNonDuplicate = "{{ path('gogo_mark_as_non_duplicate') }}";
   </script>
 {% endblock %}

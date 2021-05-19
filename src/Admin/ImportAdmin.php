@@ -16,6 +16,8 @@ use App\Helper\GoGoHelper;
 
 class ImportAdmin extends AbstractAdmin
 {
+    public $config;
+    
     public function getTemplate($name)
     {
         $isDynamic = "App\Document\ImportDynamic" == $this->getClass();
@@ -35,14 +37,21 @@ class ImportAdmin extends AbstractAdmin
         $repo = $dm->get('Element');
         $formProperties = json_encode($repo->findFormProperties());
         $elementProperties = json_encode($repo->findDataCustomProperties());
-        $config = $dm->get('Configuration')->findConfiguration();
+        $this->config = $dm->get('Configuration')->findConfiguration();
         $taxonomy = $dm->get('Taxonomy')->findTaxonomy();
         $optionsList = $taxonomy->getTaxonomyJson();
 
         $isDynamic = $this->getSubject()->isDynamicImport();
         $title = $isDynamic ? "Import Dynamique, pour afficher des données gérées par quelqu'un d'autre" : 'Importer des données en dur, depuis un fichier CSV ou une API Json';
         $isPersisted = $this->getSubject()->getId();
-        
+        $moderateElementconfig = [
+            'required' => false, 
+            'label' => 'Modérer les éléments importés',
+            'label_attr' => ['title' => 'Les éléments importés auront le status "en attente de validation" et devront être manuellement validés. Idem pour des mise à jour d\'éléments existant (modification)']];
+
+        $usersQuery = $dm->query('User');
+        $usersQuery->addOr($usersQuery->expr()->field('roles')->exists(true))
+                   ->addOr($usersQuery->expr()->field('groups')->exists(true));
         $formMapper
             ->tab('Général')
                 ->with($title, ['class' => 'col-md-12'])
@@ -55,8 +64,8 @@ class ImportAdmin extends AbstractAdmin
                     ->add('url', HiddenType::class)
                     ->add('sourceType', null, ['attr' => ['class' => 
                             'gogo-element-import',
-                            'data-title-layer' => $config->getDefaultTileLayer()->getUrl(),
-                            'data-default-bounds' => json_encode($config->getDefaultBounds()),
+                            'data-title-layer' => $this->config->getDefaultTileLayer()->getUrl(),
+                            'data-default-bounds' => json_encode($this->config->getDefaultBounds()),
                         ], 'required' => true, 'label' => 'Type de la source'])
                 ->end()
                 ->with('Paramètres', ['class' => 'col-md-12'])
@@ -65,13 +74,17 @@ class ImportAdmin extends AbstractAdmin
                         'class' => 'App\Document\User',
                         'required' => false,
                         'multiple' => true,
+                        'query' => $usersQuery,
                         'btn_add' => false,
                         'label' => "Utilisateurs à notifier en cas d'erreur, ou lorsque de nouveaux champs/catégories sont à faire correspondre", ], ['admin_code' => 'admin.option_hidden'])
-                    
-                    ->add('moderateElements', null, [
-                        'required' => false, 
-                        'label' => 'Modérer les éléments importés',
-                        'label_attr' => ['title' => 'Les éléments importés auront le status "en attente de validation" et devront être manuellement validés. Idem pour des mise à jour d\'éléments existant (modification)']])
+                    ->add('isSynchronized', null, [
+                        'disabled' => !$this->config->getOsm()->isConfigured(),
+                        'required' => false,
+                        'attr' => ['class' => 'input-is-synched'],
+                        'label_attr' => ['title' => "Chaque modification sera envoyée à OpenStreetMap"],
+                        'label' => "Autoriser l'édition des données" . ($this->config->getOsm()->isConfigured() ? '' : ' (Vous devez préalablement renseigner des identifiants dans Autre configuration -> OpenStreetMap)')
+                    ])
+                    ->add('moderateElements', null, $moderateElementconfig)
                     ->add('idsToIgnore', TextType::class, ['mapped' => false, 'required' => false, 
                         'attr' => ['class' => 'gogo-display-array', 
                         'value' => $this->getSubject()->getIdsToIgnore()], 
@@ -79,7 +92,8 @@ class ImportAdmin extends AbstractAdmin
                         'label_attr' => ['title' => "Pour ignorer un élément, supprimer le (définitivement) et il ne sera plus jamais importé. Si vous supprimez un élément dynamiquement importé juste en changeant son status (soft delete), l'élément sera quand meme importé mais conservera son status supprimé. Vous pourrez donc à tout moment restaurer cet élement pour le voir apparaitre de nouveau"]]);
         } else {
             $formMapper                    
-                    ->add('url', UrlType::class, ['label' => 'Ou URL vers un API Json', 'required' => false]);
+                    ->add('url', UrlType::class, ['label' => 'Ou URL vers un API Json', 'required' => false])
+                    ->add('moderateElements', null, $moderateElementconfig);
         }
         $formMapper->end();                
         if ($isPersisted) {
@@ -122,17 +136,24 @@ Transformer un attribut
             $formMapper
                 ->tab($title)                    
                     ->with('Transformer les données à importer')
-                        ->add('ontologyMapping', null, ['label_attr' => ['style' => 'display:none'], 'attr' => ['class' => 'gogo-mapping-ontology', 'data-form-props' => $formProperties, 'data-props' => $elementProperties]])
+                        ->add('ontologyMapping', null, [
+                            'label_attr' => ['style' => 'display:none'], 
+                            'attr' => ['class' => 'gogo-mapping-ontology', 
+                            'data-form-props' => $formProperties, 
+                            'data-props' => $elementProperties]])
                     ->end();
                 
                 if ($this->getSubject()->getSourceType() != 'osm') {
-                        $formMapper->with('Autres Options', ['box_class' => 'box box-default'])
-                        ->add('geocodeIfNecessary', null, ['required' => false, 'label' => 'Géocoder les élements sans latitude ni longitude à partir de leur adresse']);
-                        if ($isDynamic) {
-                            $formMapper
-                                    ->add('fieldToCheckElementHaveBeenUpdated', null, ['required' => false, 'label' => "Nom de l'attribut à comparer pour la mise à jour", 'label_attr' => ['title' => "Lorsqu'on met à jour une source, certains des éléments à importer existent déjà dans notre base de donnée. Vous pouvez renseigner ici un champs qui permettra de comparer si l'élément à été mis à jour au sein de la source depuis le dernier import. Exple de champ: updatedAt, date_maj etc... (laisser vide pour mettre à jour les éléments à chaque fois)"]]);
-                        }
-                    $formMapper->end();
+                    $formMapper
+                    ->with('Autres Options', ['box_class' => 'box box-default'])
+                        ->add('geocodeIfNecessary', null, [
+                            'required' => false, 
+                            'label' => 'Géocoder les élements sans latitude ni longitude à partir de leur adresse'])
+                        ->add('fieldToCheckElementHaveBeenUpdated', null, [
+                            'required' => false, 
+                            'label' => "Nom de l'attribut à comparer pour la mise à jour", 
+                            'label_attr' => ['title' => "Lorsqu'on met à jour une source, certains des éléments à importer existent déjà dans notre base de donnée. Vous pouvez renseigner ici un champs qui permettra de comparer si l'élément à été mis à jour au sein de la source depuis le dernier import. Exple de champ: updatedAt, date_maj etc... (laisser vide pour mettre à jour les éléments à chaque fois)"]])
+                    ->end();
                 }
                 $formMapper->end();
 
@@ -153,9 +174,51 @@ Transformer un attribut
                             'required' => false,
                             'multiple' => true,
                             'btn_add' => false,
-                            'label' => 'Catégories à ajouter à chaque élément importé', ], ['admin_code' => 'admin.option_hidden'])
-                        ->add('needToHaveOptionsOtherThanTheOnesAddedToEachElements', null, ['required' => false, 'label' => 'Les éléments importés sans catégorie (en dehors de celles ajoutées manuellement ci-dessus) seront marqués comme "à modérer"', 'label_attr' => ['title' => "Sans prendre en compte les catégories ajoutés via le champs \"Catégories à ajouter à chaque élément importé\", si les éléments importés n'ont pas de catégories, ils seront marqués comme \"Modération aucune catégorie renseignée\""]])
-                        ->add('preventImportIfNoCategories', null, ['required' => false, 'label' => "Ne pas importer les éléments qui n'ont aucune catégories", 'label_attr' => ['title' => "Lorsqu'on veut importer seulement une partie des éléments d'une base de donnée, il peut être pratique de mapper uniquement les catégories que l'on veut importer. Mais tous les autres élément seront aussi importés mais sans catégories. En cochant cette option, uniquement les éléments avec une catégorie mappée seront importés"]])
+                            'label' => 'Catégories à ajouter à chaque élément importé', ], 
+                            ['admin_code' => 'admin.option_hidden'])
+                        ->add('needToHaveOptionsOtherThanTheOnesAddedToEachElements', null, [
+                            'required' => false, 
+                            'label' => 'Les éléments importés sans catégorie (en dehors de celles ajoutées manuellement ci-dessus) seront marqués comme "à modérer"', 
+                            'label_attr' => ['title' => "Sans prendre en compte les catégories ajoutés via le champs \"Catégories à ajouter à chaque élément importé\", si les éléments importés n'ont pas de catégories, ils seront marqués comme \"Modération aucune catégorie renseignée\""]])
+                        ->add('preventImportIfNoCategories', null, [
+                            'required' => false, 
+                            'label' => "Ne pas importer les éléments qui n'ont aucune catégories", 
+                            'label_attr' => ['title' => "Lorsqu'on veut importer seulement une partie des éléments d'une base de donnée, il peut être pratique de mapper uniquement les catégories que l'on veut importer. Mais tous les autres élément seront aussi importés mais sans catégories. En cochant cette option, uniquement les éléments avec une catégorie mappée seront importés"]])
+                    ->end()
+                ->end();
+            }
+
+            if ($this->getSubject()->isDynamicImport() && $this->getSubject()->getIsSynchronized()) {
+                // TAB - Custom Code For Export
+                $formMapper->tab("Convertir les données pour l'export")
+                    ->with("Entrez du code qui sera exécuté lors de l'export, avant leur envoi pour synchronisation", 
+                        ['description' => "La variable <b>\$element</b> représente l'élément dans GoGoCarto, la variable <b>\$osmFeature</b> représente la donnée OSM reconstruite à partir de l'élement GoGoCarto</br>
+<pre>Quelques examples de transformations simple:</pre>
+Si l'élement contient la catégorie \"Vrac\", on rajoute un tag OSM
+<pre>&lt;?php
+if (in_array('Vrac', \$element->getCategoriesNames())) {
+    \$osmFeature['tags']['bulk_purchase'] = 'yes';
+}</pre>
+Si l'élement contient la catégorie numéro 12, on rajoute un tag OSM
+Cette méthode est à préférer car si on change le nom de la catégorie le code fonctionnera toujours
+L'ID d'une catégorie est noté entre parenthèse après son nom dans Personnalisation / Catégories
+<pre>&lt;?php
+if (in_array(12, \$element->getCategoriesIds())) {
+    \$osmFeature['tags']['bulk_purchase'] = 'yes';
+}</pre>
+Si l'élement a une valeur spécifique pour un champ définit dans le formulaire
+<pre>&lt;?php
+if (\$element->getProperty('vrac') == 'oui') {
+    \$osmFeature['tags']['bulk_purchase'] = 'yes';
+}</pre>
+On ajoute un tag pour tous les éléments
+<pre>&lt;?php
+\$osmFeature['tags']['bulk_purchase'] = 'yes';
+</pre>"])
+                        ->add('customCodeForExport', null, [
+                            'label' => 'Code PHP qui sera exécuté', 
+                            'attr' => ['class' => 'gogo-code-editor', 'format' => 'php', 'height' => '500'], 
+                            'required' => false])
                     ->end()
                 ->end();
             }

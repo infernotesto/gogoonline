@@ -12,7 +12,7 @@ ssh_password
 *~
 .idea
 /web/matomo/
-/docker/docker-compose.local.yml
+docker-compose.local.yml
 /custom/
 
 ###> symfony/framework-bundle ###
@@ -36,3 +36,7 @@ ssh_password
 npm-debug.log
 yarn-error.log
 ###< symfony/webpack-encore-bundle ###
+
+###> symfony/web-server-bundle ###
+/.web-server-pid
+###< symfony/web-server-bundle ###

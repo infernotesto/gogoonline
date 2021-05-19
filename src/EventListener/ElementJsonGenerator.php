@@ -58,26 +58,31 @@ class ElementJsonGenerator
             return;
         }
         $config = $this->getConfig($this->dm);
+        if (!$config) return;
         $options = $this->getOptions($this->dm);
         $privateProps = $config->getApi()->getPublicApiPrivateProperties();
 
         // -------------------- FULL JSON ----------------
 
         // BASIC FIELDS
-        $baseJson = json_encode($element);
-        $baseJson = ltrim($baseJson, '{'); // remove first '{'
-        $baseJson = rtrim($baseJson, '}'); // remove last '}'
-        if ($element->getAddress()) {
-            $baseJson .= ',"address":'.$element->getAddress()->toJson();
+        $baseProps = ['id', 'name', 'geo', 'sourceKey', 'address', 'openHours'];
+        $baseJson = "";
+        foreach($baseProps as $key) {
+            $method = 'get'.ucfirst($key);
+            $value = $element->$method();
+            if ($value) {
+                if (is_object($value)) $value = $value->toJson();
+                else $value = json_encode($value);
+                if (is_string($value) && strlen($value) > 0 && $value != "null") 
+                    $baseJson .= ",\"$key\":$value";
+            }            
         }
-        if ($element->getOpenHours()) {
-            $baseJson .= ',"openHours": '.$element->getOpenHours()->toJson();
-        }
+        $baseJson = ltrim($baseJson, ','); // remove first ','
 
         // CREATED AT, UPDATED AT
-        $baseJson .= ',"createdAt":"'.date_format($element->getCreatedAt(), 'd/m/Y à H:i').'"';
+        $baseJson .= ',"createdAt":"'. $element->getCreatedAt()->format(\DateTime::ATOM) .'"';
         $updatedAt = $element->getUpdatedAt() ? $element->getUpdatedAt() : $element->getCreatedAt();
-        $updatedAtFormated = 'integer' == gettype($updatedAt) ? date('d/m/Y à H:i', $updatedAt) : date_format($updatedAt, 'd/m/Y à H:i');
+        $updatedAtFormated = 'integer' == gettype($updatedAt) ? date(\DateTime::ATOM, $updatedAt) : $updatedAt->format(\DateTime::ATOM);
         $baseJson .= ',"updatedAt":"'.$updatedAtFormated.'"';
 
         // STATUS
@@ -108,7 +113,7 @@ class ElementJsonGenerator
             }
         }
         $baseJson .= ',"categories": ' . json_encode($elementOptions) . ',';
-        $element->setOptionsString(implode(',', $elementOptions)); // we also update optionsString attribute which is used in exporting from element admin list
+        $element->setOptionsString(implode(', ', $elementOptions)); // we also update optionsString attribute which is used in exporting from element admin list
         // Options values with description
         if (count($optionsFullJson)) {
             $baseJson .= '"categoriesFull": ['.implode(',', $optionsFullJson).'],';
@@ -166,8 +171,11 @@ class ElementJsonGenerator
         // [id, customData, latitude, longitude, status, moderationState]
         $compactFields = $config->getCompactFields();
         $compactData = [];
-        foreach ($compactFields as $field) {
-            $compactData[] = $element->getProperty($field);
+        foreach ($compactFields as $field => $type) {
+            $value = $element->getProperty($field);
+            if ($type == 'gogo_date' && count(explode('T', $value)) == 2)
+                $value = explode('T', $value)[0]; // remove the time part of iso dates (save space), cause we don't need it in gogocartoJs for the filter
+            $compactData[] = $value;
         }
 
         $compactJson = '["'.$element->id.'",'.json_encode($compactData).',';
