@@ -23,7 +23,7 @@ class CoreController extends GoGoController
             $url = $urlService->generateRootUrl();
             return $this->redirect($url);
         }
-        if ($config->getActivateHomePage()) {
+        if (!$config->getActivateHomePage()) {
             return $this->redirectToRoute('gogo_directory');
         }
 
