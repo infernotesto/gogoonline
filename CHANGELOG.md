@@ -9,7 +9,7 @@ v3.2.1
 v3.1.4
 ======
 * FEATURE: Ability to configure a custom domain in SASS mode (if the server uses nginx)
-* CONFIG: you need to add new entry in your .env.local : DATABASE_NAME=projetdustage-5218
+* CONFIG: you need to add new entry in your .env.local : DATABASE_NAME=gogoonline-9358
 
 v3.0.0
 ======

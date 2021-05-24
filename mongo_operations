@@ -3,7 +3,7 @@ apt upgrade
 
 http://localhost/GoGoCarto/web/app_dev.php/elements/update-colibris-lmc/export_lmc_1.csv
 
-use projetdustage-5218
+use gogoonline-9358
 db.Element.deleteMany({"sourceKey":"LMC"})
 
 db.Element.updateMany({"sourceKey":"gogocarto"}, {$set: {"sourceKey":"PDCN"}})
@@ -98,7 +98,7 @@ db.User.find({'email': { $ne: '' }},{'mail':1, '_id':0}).forEach(function(x){
   print(x.email+",");
 });
 # then run
-mongo projetdustage-5218 script.js > export.csv
+mongo gogoonline-9358 script.js > export.csv
 # and copy it to your machine
 scp admin@colibris_prod:/home/admin/export.csv local-export-copy.csv
 
@@ -129,7 +129,7 @@ db.Element.find({ 'data.openhours_more_infos': null })
 
 db.GoGoLog.updateMany( { } , { $rename: { 'type': 'level' } } )
 
-db.Configuration.updateMany( { } , { $set: { 'defautTileLayer': DBRef("TileLayer", 7, "projetdustage-5218") }})
+db.Configuration.updateMany( { } , { $set: { 'defautTileLayer': DBRef("TileLayer", 7, "gogoonline-9358") }})
 
 // Reset duplicates
 db.Element.updateMany({moderationState: 4}, {$set: {moderationState: 0, isDuplicateNode: false}, $unset: { potentialDuplicates: 1} })
@@ -158,9 +158,9 @@ return result;
 
 db.Element.find({'images': {$exists: true}}).forEach(function(e) {
   e.images.forEach(function(image) {
-      image.fileUrl = image.fileUrl.replace('projetdustage-5218', 'presdecheznous');
-      image.filePath = image.filePath.replace('projetdustage-5218', 'presdecheznous');
-      image.externalImageUrl = image.externalImageUrl.replace('projetdustage-5218', 'presdecheznous');
+      image.fileUrl = image.fileUrl.replace('gogoonline-9358', 'presdecheznous');
+      image.filePath = image.filePath.replace('gogoonline-9358', 'presdecheznous');
+      image.externalImageUrl = image.externalImageUrl.replace('gogoonline-9358', 'presdecheznous');
   })
   db.Element.save(e);  
 });
