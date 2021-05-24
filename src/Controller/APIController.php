@@ -221,7 +221,7 @@ class APIController extends GoGoController
         return $this->render('api/api-ui.html.twig', ['options' => $options, 'config' => $config]);
     }
 
-    public function getManifestAction(Request $request, DocumentManager $dm)
+    public function Action(Request $request, DocumentManager $dm)
     {
         $config = $dm->get('Configuration')->findConfiguration();
         if (!$config) return new Response(json_encode(['error' => "No configuration found"]));
