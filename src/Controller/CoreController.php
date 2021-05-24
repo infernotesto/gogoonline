@@ -23,7 +23,8 @@ class CoreController extends GoGoController
             $url = $urlService->generateRootUrl();
             return $this->redirect($url);
         }
-
+            return $this->redirectToRoute('gogo_directory');
+        
 
         // Get Wrapper List
         $listWrappers = $dm->get('Wrapper')->findAllOrderedByPosition();
